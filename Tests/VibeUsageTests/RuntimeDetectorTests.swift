@@ -2,6 +2,26 @@ import XCTest
 @testable import VibeUsage
 
 final class RuntimeDetectorTests: XCTestCase {
+    func testExternalBundleUsesNpxPackageSyntaxForLocalTarball() {
+        XCTAssertEqual(
+            RuntimeDetector.arguments(
+                runtimeName: "npx",
+                command: ["quota", "discover", "--json"],
+                packageSpecifier: "/Applications/Vibe Usage Test.app/Contents/Resources/vibe-usage-cli.tgz",
+                usesBundledPackage: true
+            ),
+            [
+                "--yes",
+                "--package",
+                "/Applications/Vibe Usage Test.app/Contents/Resources/vibe-usage-cli.tgz",
+                "vibe-usage",
+                "quota",
+                "discover",
+                "--json",
+            ]
+        )
+    }
+
     func testBunUsesPinnedCompatiblePackage() {
         XCTAssertEqual(RuntimeDetector.defaultPackageSpecifier, "@vibe-cafe/vibe-usage@0.10.23")
         XCTAssertEqual(

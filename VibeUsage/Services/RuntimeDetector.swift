@@ -18,6 +18,10 @@ enum RuntimeDetector {
             ?? bundledPackageSpecifier
             ?? defaultPackageSpecifier
     }
+    private static var usesBundledPackage: Bool {
+        ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] == nil
+            && bundledPackageSpecifier != nil
+    }
 
     struct Runtime {
         let executablePath: String
@@ -30,11 +34,28 @@ enum RuntimeDetector {
     }
 
     static func arguments(runtimeName: String, command: [String]) -> [String] {
+        arguments(
+            runtimeName: runtimeName,
+            command: command,
+            packageSpecifier: packageSpecifier,
+            usesBundledPackage: usesBundledPackage
+        )
+    }
+
+    static func arguments(
+        runtimeName: String,
+        command: [String],
+        packageSpecifier: String,
+        usesBundledPackage: Bool
+    ) -> [String] {
+        if usesBundledPackage {
+            return ["--yes", "--package", packageSpecifier, "vibe-usage"] + command
+        }
         switch runtimeName {
         case "bun":
-            ["x", packageSpecifier] + command
+            return ["x", packageSpecifier] + command
         default:
-            ["--yes", packageSpecifier] + command
+            return ["--yes", packageSpecifier] + command
         }
     }
 
@@ -132,7 +153,7 @@ enum RuntimeDetector {
         // External-test bundles carry an exact local CLI tarball. bun x does
         // not accept package-file paths, so this variant intentionally uses
         // npx and reports no runtime if Node/npm is missing.
-        if bundledPackageSpecifier != nil {
+        if usesBundledPackage {
             return findExecutable("npx").map { Runtime(executablePath: $0, name: "npx") }
         }
         // Local package paths are an integration-test hook; bun x does not
