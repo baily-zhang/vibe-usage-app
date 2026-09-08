@@ -23,7 +23,7 @@ struct SettingsView: View {
     @State private var isSavingZCodeAPIKey = false
     @State private var zCodeAPIKeyMessage: String?
     @State private var zCodeAPIKeyError: String?
-    #if DEBUG
+    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
     @State private var diagnosticExportMessage: String?
     #endif
 
@@ -346,7 +346,7 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             Section {
                 Button("导出诊断日志…") {
                     exportDiagnosticLog()
@@ -543,7 +543,7 @@ struct SettingsView: View {
         }
     }
 
-    #if DEBUG
+    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
     private func exportDiagnosticLog() {
         diagnosticExportMessage = nil
         let panel = NSSavePanel()

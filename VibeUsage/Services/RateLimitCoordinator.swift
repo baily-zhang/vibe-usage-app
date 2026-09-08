@@ -110,7 +110,7 @@ final class RateLimitCoordinator {
 
     private func performCodexRefresh() async {
         guard let appState, appState.codexRateLimitEnabled else { return }
-        #if DEBUG
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaRefreshStarted([.codex])
         #endif
 
@@ -135,12 +135,12 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaCancelled([.codex])
             #endif
             return
         } catch {
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaFailure([.codex], error: error)
             #endif
             // Offline / endpoint drift → degrade to exactly the pre-network
@@ -175,7 +175,7 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
-        #if DEBUG
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         if let snapshot = currentSnapshot(.codex) {
             TestDiagnosticLog.recordQuotaResult(snapshot)
         }
@@ -222,7 +222,7 @@ final class RateLimitCoordinator {
     private func performClaudeRefresh() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() entered")
-        #if DEBUG
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaRefreshStarted([.claudeCode])
         #endif
 
@@ -242,12 +242,12 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaCancelled([.claudeCode])
             #endif
             return
         } catch {
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaFailure([.claudeCode], error: error)
             #endif
             let failure = Self.classify(error)
@@ -271,7 +271,7 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
-        #if DEBUG
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         if let snapshot = currentSnapshot(.claudeCode) {
             TestDiagnosticLog.recordQuotaResult(snapshot)
         }
@@ -335,7 +335,7 @@ final class RateLimitCoordinator {
 
     private func performCLIRefresh(_ providers: [ProviderRateLimit.Provider]) async {
         guard let appState else { return }
-        #if DEBUG
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaRefreshStarted(providers)
         #endif
         do {
@@ -353,11 +353,11 @@ final class RateLimitCoordinator {
                                 || currentSnapshot(provider)?.status != .ok {
                         upsert(snapshot)
                     }
-                    #if DEBUG
+                    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                     TestDiagnosticLog.recordQuotaResult(snapshot)
                     #endif
                 } else {
-                    #if DEBUG
+                    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
                     TestDiagnosticLog.recordMissingQuotaResult(provider)
                     #endif
                     if currentSnapshot(provider)?.status != .ok {
@@ -371,13 +371,13 @@ final class RateLimitCoordinator {
                 lastCLIFetchAt[provider] = Date()
             }
         } catch is CancellationError {
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaCancelled(providers)
             #endif
             return
         } catch {
             debugLog("[rate-limit] quota CLI failed: \(error)")
-            #if DEBUG
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
             TestDiagnosticLog.recordQuotaFailure(providers, error: error)
             #endif
             guard !Task.isCancelled else { return }

@@ -3,12 +3,14 @@ set -euo pipefail
 
 # Build Vibe Usage.app from SPM release binary
 # Usage:
-#   ./scripts/build-app.sh [--notarize] [--universal]
-#   ./scripts/build-app.sh [--notarize] [--arch arm64] [--arch x86_64]
+#   ./scripts/build-app.sh [--notarize] [--universal] [--external-test]
+#   ./scripts/build-app.sh [--notarize] [--arch arm64] [--arch x86_64] [--external-test]
 #
 # --universal is shorthand for --arch arm64 --arch x86_64 (fat/universal binary).
 # Omit --arch/--universal to build the host architecture only (faster local builds).
 # Release builds should use --universal so Intel and Apple Silicon Macs both work.
+# --external-test keeps the production service/config behavior of a Release build,
+# while compiling in the local, redacted diagnostic exporter for test packages.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -27,17 +29,19 @@ MACOS_DEPLOYMENT_TARGET="14.0"
 
 NOTARIZE=false
 UNIVERSAL=false
+EXTERNAL_TEST=false
 ARCHS=()
 
 usage() {
     cat <<EOF
-Usage: $0 [--notarize] [--universal]
-       $0 [--notarize] [--arch <arch>]...
+Usage: $0 [--notarize] [--universal] [--external-test]
+       $0 [--notarize] [--arch <arch>]... [--external-test]
 
 Options:
   --notarize          Notarize the signed app + DMG (requires Developer ID)
   --universal         Build a universal (arm64 + x86_64) binary
   --arch <arch>       Build for architecture (repeatable: arm64, x86_64)
+  --external-test     Release-mode app with redacted local test diagnostics
 EOF
 }
 
@@ -49,6 +53,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --universal)
             UNIVERSAL=true
+            shift
+            ;;
+        --external-test)
+            EXTERNAL_TEST=true
             shift
             ;;
         --arch)
@@ -131,6 +139,12 @@ echo "==> Checking version sync..."
 
 cd "$PROJECT_DIR"
 
+SWIFT_BUILD_ARGS=()
+if $EXTERNAL_TEST; then
+    SWIFT_BUILD_ARGS=(-Xswiftc -D -Xswiftc VIBE_USAGE_EXTERNAL_TEST)
+    echo "==> External-test diagnostics enabled (production API/config unchanged)."
+fi
+
 # Prefer SwiftPM --arch when available (Xcode toolchain); otherwise --triple (CLT).
 SWIFT_SUPPORTS_ARCH=false
 if swift build --help 2>&1 | grep -q -- '--arch'; then
@@ -144,16 +158,16 @@ arch_bin_dir() {
 
 build_host() {
     echo "==> Building release binary (host architecture)..."
-    swift build -c release
+    swift build -c release "${SWIFT_BUILD_ARGS[@]}"
 }
 
 build_arch() {
     local arch="$1"
     echo "==> Building release binary ($arch)..."
     if $SWIFT_SUPPORTS_ARCH; then
-        swift build -c release --arch "$arch"
+        swift build -c release --arch "$arch" "${SWIFT_BUILD_ARGS[@]}"
     else
-        swift build -c release --triple "${arch}-apple-macosx${MACOS_DEPLOYMENT_TARGET}"
+        swift build -c release --triple "${arch}-apple-macosx${MACOS_DEPLOYMENT_TARGET}" "${SWIFT_BUILD_ARGS[@]}"
     fi
 }
 
@@ -331,6 +345,9 @@ else
     echo "==> Done! Signed app bundle at:"
     echo "    $APP_BUNDLE"
     echo "    Architectures: $(lipo -archs "$APP_BUNDLE/Contents/MacOS/$EXECUTABLE" 2>/dev/null || true)"
+    if $EXTERNAL_TEST; then
+        echo "    Build kind: external test (redacted diagnostics enabled)"
+    fi
     echo ""
     echo "    To notarize (universal): $0 --universal --notarize"
     echo "    To install:  cp -R \"$APP_BUNDLE\" /Applications/"

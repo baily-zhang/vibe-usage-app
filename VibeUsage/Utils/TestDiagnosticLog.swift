@@ -1,10 +1,11 @@
-#if DEBUG
+#if DEBUG || VIBE_USAGE_EXTERNAL_TEST
 import Foundation
 
 /// Local, exportable diagnostics for development/test builds only.
 ///
-/// The entire implementation is excluded from Release binaries. Entries are
-/// deliberately typed: callers cannot attach raw stderr, response bodies,
+/// The entire implementation is excluded from ordinary Release binaries. It is
+/// present only in Debug and explicitly flagged external-test builds. Entries
+/// are deliberately typed: callers cannot attach raw stderr, response bodies,
 /// paths, account identifiers, or credentials by accident.
 enum TestDiagnosticLog {
     struct Entry: Codable, Sendable {

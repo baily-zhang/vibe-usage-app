@@ -15,6 +15,22 @@ security find-identity -v -p codesigning
 xcrun notarytool history --keychain-profile VibeUsage
 ```
 
+## External test build
+
+An external test build uses the production API and the normal per-user config,
+but includes the local, redacted quota diagnostic exporter. Build it only with
+the explicit flag:
+
+```bash
+./scripts/build-app.sh --external-test --universal --notarize
+```
+
+Do not generate or publish an Appcast for an external test build. Ordinary
+Release builds omit the diagnostic implementation and UI at compile time. The
+app's exact CLI package specifier must point to an already-published test or
+stable CLI version before distributing the package; never point testers at an
+unpublished local path or `@latest`.
+
 ## Moving releases to another Mac
 
 The Sparkle key was rotated for `v0.5.4`. Every later release must use the
