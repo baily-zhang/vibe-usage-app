@@ -19,6 +19,10 @@ struct SettingsView: View {
     @State private var extraRoots: CLIBridge.ExtraRoots = [:]
     @State private var extraRootsError: String?
     @State private var editingExtraRoots = false
+    @State private var zCodeAPIKey = ""
+    @State private var isSavingZCodeAPIKey = false
+    @State private var zCodeAPIKeyMessage: String?
+    @State private var zCodeAPIKeyError: String?
 
     private let extraRootSources = [
         (id: "codex", name: "Codex"),
@@ -213,7 +217,7 @@ struct SettingsView: View {
                     )) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(product.displayName)
-                            Text(product.statusText)
+                            Text(appState.quotaProductStatusText(product))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if product.provider == .claudeCode,
@@ -231,6 +235,44 @@ struct SettingsView: View {
                     )
                 }
 
+                if appState.quotaProducts.first(where: { $0.provider == .zCode })?.isDetected == true
+                    || appState.zCodeAPIKeyConfigured {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("ZCode 使用用户明确提供的 Z.ai API Key；不会读取 ZCode 登录凭据。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 8) {
+                            SecureField(
+                                appState.zCodeAPIKeyConfigured ? "输入新 Key 以更新" : "Z.ai API Key",
+                                text: $zCodeAPIKey
+                            )
+                            Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
+                                Task { await saveZCodeAPIKey() }
+                            }
+                            .disabled(
+                                zCodeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || isSavingZCodeAPIKey
+                            )
+                            if appState.zCodeAPIKeyConfigured {
+                                Button("移除", role: .destructive) {
+                                    Task { await removeZCodeAPIKey() }
+                                }
+                                .disabled(isSavingZCodeAPIKey)
+                            }
+                        }
+                        if let zCodeAPIKeyMessage {
+                            Text(zCodeAPIKeyMessage)
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                        if let zCodeAPIKeyError {
+                            Text(zCodeAPIKeyError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                }
+
                 Button("重新检测本机产品") {
                     appState.rediscoverQuotaProducts()
                 }
@@ -239,7 +281,7 @@ struct SettingsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("最多选择两个产品；未选择的产品不会联网读取配额。")
-                    Text("Grok（Cursor）、ZCode、Kimi Code 会先进行本地识别，协议验证完成后开放选择。")
+                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 需配置 Z.ai API Key；Grok（Cursor）暂不使用 Cookie 等高权限方式接入。")
                 }
                 .font(.caption)
             }
@@ -428,6 +470,37 @@ struct SettingsView: View {
             await appState.triggerSync()
         } catch {
             extraRootsError = error.localizedDescription
+        }
+    }
+
+    private func saveZCodeAPIKey() async {
+        isSavingZCodeAPIKey = true
+        zCodeAPIKeyMessage = nil
+        zCodeAPIKeyError = nil
+        defer { isSavingZCodeAPIKey = false }
+        do {
+            try appState.storeZCodeAPIKey(zCodeAPIKey)
+            zCodeAPIKey = ""
+            zCodeAPIKeyMessage = "已安全保存到 Vibe Usage 钥匙串"
+            if appState.isQuotaProviderSelected(.zCode) {
+                await appState.refreshRateLimit(for: .zCode)
+            }
+        } catch {
+            zCodeAPIKeyError = error.localizedDescription
+        }
+    }
+
+    private func removeZCodeAPIKey() async {
+        isSavingZCodeAPIKey = true
+        zCodeAPIKeyMessage = nil
+        zCodeAPIKeyError = nil
+        defer { isSavingZCodeAPIKey = false }
+        do {
+            try appState.storeZCodeAPIKey(nil)
+            zCodeAPIKey = ""
+            zCodeAPIKeyMessage = "已移除；ZCode 配额显示已关闭"
+        } catch {
+            zCodeAPIKeyError = error.localizedDescription
         }
     }
 

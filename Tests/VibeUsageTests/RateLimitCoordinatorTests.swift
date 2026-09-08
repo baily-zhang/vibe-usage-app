@@ -3,6 +3,39 @@ import Testing
 @testable import VibeUsage
 
 struct RateLimitCoordinatorTests {
+    private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
+        var value: String?
+        init(value: String? = nil) { self.value = value }
+        func load() throws -> String? { value }
+        func store(_ value: String?) throws { self.value = value }
+    }
+
+    @MainActor
+    private func selectedAppState(
+        _ providers: [ProviderRateLimit.Provider],
+        zCodeAPIKey: String? = nil
+    ) -> (AppState, UserDefaults, String) {
+        let suite = "RateLimitCoordinatorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(providers.map(\.rawValue), forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(value: zCodeAPIKey),
+            quotaProductDiscoverer: {
+                QuotaProductRegistry.catalog.map { provider, availability in
+                    QuotaProduct(
+                        provider: provider,
+                        availability: availability,
+                        isDetected: providers.contains(provider)
+                    )
+                }
+            }
+        )
+        appState.initializeQuotaProducts()
+        return (appState, defaults, suite)
+    }
+
     private func snapshot(
         utilization: Double,
         dataAsOf: Date?,
@@ -202,6 +235,100 @@ struct RateLimitCoordinatorTests {
 
         #expect(fetchCount == 0)
         #expect(appState.rateLimits.allSatisfy { $0.provider != .codex })
+    }
+
+    @Test @MainActor
+    func unselectedCLIProviderDoesNotStartItsFetcher() async {
+        let (appState, defaults, suite) = selectedAppState([.codex])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var fetchCount = 0
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { _, _ in
+                fetchCount += 1
+                return []
+            }
+        )
+
+        await coordinator.refreshCLIProviders([.kimiCode])
+
+        #expect(fetchCount == 0)
+        #expect(appState.rateLimits.allSatisfy { $0.provider != .kimiCode })
+    }
+
+    @Test @MainActor
+    func cliProviderFailureDoesNotReplaceAnotherProvidersSuccess() async {
+        let (appState, defaults, suite) = selectedAppState(
+            [.kimiCode, .zCode],
+            zCodeAPIKey: "fixture-key"
+        )
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let kimi = ProviderRateLimit(
+            provider: .kimiCode,
+            meters: [RateLimitMeter(
+                id: "weekly",
+                label: "7d",
+                window: RateLimitWindow(utilization: 40)
+            )],
+            status: .ok,
+            fetchedAt: Date(),
+            dataAsOf: Date()
+        )
+        let zCode = ProviderRateLimit(
+            provider: .zCode,
+            status: .retryableError,
+            fetchedAt: Date()
+        )
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { providers, key in
+                #expect(providers == [.kimiCode, .zCode])
+                #expect(key == "fixture-key")
+                return [kimi, zCode]
+            }
+        )
+
+        await coordinator.refreshCLIProviders([.kimiCode, .zCode])
+
+        #expect(appState.rateLimits.first(where: { $0.provider == .kimiCode }) == kimi)
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .zCode })?.status
+                == .retryableError
+        )
+        #expect(appState.cliQuotaRefreshingProviders.isEmpty)
+    }
+
+    @Test @MainActor
+    func closingPanelDoesNotRestartAQueuedCLIRequest() async {
+        let (appState, defaults, suite) = selectedAppState([.kimiCode, .zCode])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var calls: [[ProviderRateLimit.Provider]] = []
+        var firstRequestStarted = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { providers, _ in
+                calls.append(providers)
+                firstRequestStarted = true
+                try await Task.sleep(for: .seconds(30))
+                return []
+            }
+        )
+
+        let active = Task { @MainActor in
+            await coordinator.refreshCLIProviders([.kimiCode])
+        }
+        while !firstRequestStarted { await Task.yield() }
+        let queued = Task { @MainActor in
+            await coordinator.refreshCLIProviders([.zCode])
+        }
+        try? await Task.sleep(for: .milliseconds(10))
+
+        coordinator.panelVisibilityChanged(visible: false)
+        await active.value
+        await queued.value
+
+        #expect(calls == [[.kimiCode]])
+        #expect(appState.cliQuotaRefreshingProviders.isEmpty)
     }
 
     private func claudeSnapshot(

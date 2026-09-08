@@ -24,11 +24,11 @@ macOS 应用，自动追踪 AI 编程工具的 Token 用量和费用。App 常�
 - 菜单栏常驻；可选显示在 Dock / Cmd-Tab，切换到 Vibe Usage 时自动打开用量面板
 - 后台每 30 分钟自动同步数据，也可手动「更新数据」
 - 弹出窗口查看费用、总 Token、缓存 Token、趋势图表
-- **订阅配额监控**：可分别显示 Codex / Claude 的 5 小时 / 7 天 token 配额，悬停查看消耗 vs 时间对比。两者都复用本机已登录的官方客户端凭据，零消耗、无需额外权限、不修改你的配置。Codex 直接读取官方用量接口；Claude 通过本机已登录的 Claude Code 读取，**同时支持 Claude Desktop 与命令行**。离线时自动回退本地缓存，并标注数据时间
+- **订阅配额监控**：自动识别 Codex、Claude、Kimi Code、ZCode 和 Grok（Cursor），可按选择顺序显示最多两个产品。Codex、Claude 和 Kimi 复用各自本机官方客户端的登录状态；ZCode 仅使用用户显式输入、保存在 Vibe Usage 自有 Keychain 项中的 Z.ai API Key。只有选中的产品会启动读取或联网，单个产品失败不影响另一张卡片；离线时可回退同账号的无凭据本地缓存并标注数据时间。Grok（Cursor）目前仅识别并标记待接入，不读取 Cookie、其他应用 Keychain 或网络流量
 - 支持今天 / 24H / 7D / 30D / 90D / 自定义日期，以及终端 / 工具 / 模型 / 项目筛选
 - 可在菜单栏显示今日费用和 Token 数
 - 可在设置中显示或隐藏 Dock 图标
-- 可在设置中分别显示或隐藏 Codex / Claude 订阅配额
+- 可在订阅配额选择器和设置中选择、排序并显示最多两个产品；首次运行只自动选择已检测且可用的产品
 - 可在设置中为 Codex、Grok、Antigravity / AGY 添加多个 Multica 或其他隔离运行时目录；旧版单一 Codex Home 配置和各工具默认目录仍会继续扫描
 - 支持开机自启动
 

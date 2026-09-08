@@ -29,11 +29,19 @@ final class RateLimitCoordinator {
     private var codexRefreshID: UUID?
     private var claudeRefreshTask: Task<Void, Never>?
     private var claudeRefreshID: UUID?
+    private var cliRefreshTask: Task<Void, Never>?
+    private var cliRefreshID: UUID?
+    private var activeCLIProviders: Set<ProviderRateLimit.Provider> = []
+    private var lastCLIFetchAt: [ProviderRateLimit.Provider: Date] = [:]
+    private var cliCancellationGeneration: UInt = 0
     private let fetchCodexLive: @MainActor () async throws -> ProviderRateLimit
     private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
+    private let fetchCLIQuotas: @MainActor (
+        [ProviderRateLimit.Provider], String?
+    ) async throws -> [ProviderRateLimit]
 
     init(
         appState: AppState,
@@ -51,6 +59,11 @@ final class RateLimitCoordinator {
         },
         loadClaudeCache: @escaping @MainActor () async -> ProviderRateLimit? = {
             await RateLimitCoordinator.loadClaudeDiskSnapshot()
+        },
+        fetchCLIQuotas: @escaping @MainActor (
+            [ProviderRateLimit.Provider], String?
+        ) async throws -> [ProviderRateLimit] = { providers, zCodeAPIKey in
+            try await QuotaCLIBridge.fetch(providers: providers, zCodeAPIKey: zCodeAPIKey)
         }
     ) {
         self.appState = appState
@@ -59,6 +72,7 @@ final class RateLimitCoordinator {
         self.readCodexFallback = readCodexFallback
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
+        self.fetchCLIQuotas = fetchCLIQuotas
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -242,12 +256,111 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
+    /// Fetches one versioned CLI envelope for the requested Kimi/ZCode set.
+    /// The CLI isolates provider failures, while this boundary also guards the
+    /// current selection before starting and again before publishing results.
+    func refreshCLIProviders(_ providers: [ProviderRateLimit.Provider]) async {
+        guard let appState else { return }
+        let requested = providers.reduce(into: [ProviderRateLimit.Provider]()) { result, provider in
+            guard (provider == .kimiCode || provider == .zCode),
+                  appState.isQuotaProviderSelected(provider),
+                  !result.contains(provider)
+            else { return }
+            result.append(provider)
+        }
+        guard !requested.isEmpty else { return }
+
+        if let task = cliRefreshTask {
+            let alreadyCovered = activeCLIProviders
+            let cancellationGeneration = cliCancellationGeneration
+            await task.value
+            guard !Task.isCancelled, cancellationGeneration == cliCancellationGeneration else { return }
+            let remaining = requested.filter {
+                !alreadyCovered.contains($0) && appState.isQuotaProviderSelected($0)
+            }
+            if !remaining.isEmpty { await refreshCLIProviders(remaining) }
+            return
+        }
+
+        let refreshID = UUID()
+        let requestedSet = Set(requested)
+        activeCLIProviders = requestedSet
+        appState.cliQuotaRefreshingProviders.formUnion(requestedSet)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performCLIRefresh(requested)
+            if self.cliRefreshID == refreshID {
+                self.cliRefreshTask = nil
+                self.cliRefreshID = nil
+                self.activeCLIProviders = []
+                self.appState?.cliQuotaRefreshingProviders.subtract(requestedSet)
+            }
+        }
+        cliRefreshID = refreshID
+        cliRefreshTask = task
+        await task.value
+    }
+
+    private func performCLIRefresh(_ providers: [ProviderRateLimit.Provider]) async {
+        guard let appState else { return }
+        do {
+            let snapshots = try await fetchCLIQuotas(providers, appState.zCodeAPIKeyForQuotaFetch())
+            guard !Task.isCancelled else { return }
+            for provider in providers where appState.isQuotaProviderSelected(provider) {
+                if let snapshot = snapshots.first(where: { $0.provider == provider }) {
+                    if snapshot.status == .ok {
+                        _ = upsertIfNewer(snapshot)
+                    } else if snapshot.status != .retryableError
+                                || currentSnapshot(provider)?.status != .ok {
+                        upsert(snapshot)
+                    }
+                } else if currentSnapshot(provider)?.status != .ok {
+                    upsert(ProviderRateLimit(
+                        provider: provider,
+                        status: .retryableError,
+                        fetchedAt: Date()
+                    ))
+                }
+                lastCLIFetchAt[provider] = Date()
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            debugLog("[rate-limit] quota CLI failed: \(error)")
+            guard !Task.isCancelled else { return }
+            for provider in providers where appState.isQuotaProviderSelected(provider) {
+                if currentSnapshot(provider)?.status != .ok {
+                    upsert(ProviderRateLimit(
+                        provider: provider,
+                        status: .retryableError,
+                        fetchedAt: Date()
+                    ))
+                }
+                lastCLIFetchAt[provider] = Date()
+            }
+        }
+    }
+
+    func refreshCLIProvidersIfNeeded(
+        _ providers: [ProviderRateLimit.Provider],
+        maxAge: TimeInterval = 60
+    ) async {
+        let stale = providers.filter { provider in
+            guard let last = lastCLIFetchAt[provider] else { return true }
+            return Date().timeIntervalSince(last) >= maxAge
+        }
+        await refreshCLIProviders(stale)
+    }
+
     /// Refresh everything currently visible, in parallel — the Codex leg now
     /// includes a network round-trip, so serializing would double the wait.
     func refreshAll() async {
         async let codex: Void = refreshCodex()
         async let claude: Void = refreshClaude()
-        _ = await (codex, claude)
+        async let cli: Void = refreshCLIProviders(
+            appState?.selectedQuotaProviders.filter { $0 == .kimiCode || $0 == .zCode } ?? []
+        )
+        _ = await (codex, claude, cli)
     }
 
     /// Popover-open refresh for the selected products only. Keeping the fan-out
@@ -256,7 +369,10 @@ final class RateLimitCoordinator {
     func refreshSelectedIfNeeded() async {
         async let codex: Void = refreshCodexIfNeeded()
         async let claude: Void = refreshClaudeIfNeeded()
-        _ = await (codex, claude)
+        async let cli: Void = refreshCLIProvidersIfNeeded(
+            appState?.selectedQuotaProviders.filter { $0 == .kimiCode || $0 == .zCode } ?? []
+        )
+        _ = await (codex, claude, cli)
     }
 
     /// Ensure every enabled provider has a placeholder entry so the card row
@@ -287,6 +403,7 @@ final class RateLimitCoordinator {
         if !visible {
             cancelCodexRefresh()
             cancelClaudeRefresh()
+            cancelCLIRefresh()
         }
     }
 
@@ -322,9 +439,19 @@ final class RateLimitCoordinator {
             cancelCodexRefresh()
         case .claudeCode:
             cancelClaudeRefresh()
-        case .kimiCode, .zCode, .cursorGrok:
-            break
+        case .kimiCode, .zCode:
+            cancelCLIRefresh()
+        case .cursorGrok: break
         }
+    }
+
+    func cancelCLIRefresh() {
+        cliCancellationGeneration &+= 1
+        cliRefreshTask?.cancel()
+        cliRefreshTask = nil
+        cliRefreshID = nil
+        activeCLIProviders = []
+        appState?.cliQuotaRefreshingProviders = []
     }
 
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {

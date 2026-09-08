@@ -65,8 +65,8 @@ enum QuotaProductRegistry {
     static let catalog: [(ProviderRateLimit.Provider, QuotaProductAvailability)] = [
         (.codex, .ready),
         (.claudeCode, .ready),
-        (.kimiCode, .pendingProtocol),
-        (.zCode, .pendingProtocol),
+        (.kimiCode, .ready),
+        (.zCode, .ready),
         (.cursorGrok, .pendingProtocol),
     ]
 
@@ -109,7 +109,7 @@ enum QuotaProductRegistry {
         case .kimiCode:
             // Deliberately avoid treating the general Kimi chat app as Kimi
             // Code. Only its coding CLI/config locations count.
-            relativePaths = [".kimi", ".config/kimi"]
+            relativePaths = [".kimi", ".kimi-code", ".config/kimi"]
             appNames = []
             executableNames = ["kimi"]
         case .zCode:

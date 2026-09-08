@@ -51,73 +51,159 @@ enum CLIBridge {
         return try JSONDecoder().decode(ExtraRoots.self, from: data)
     }
 
-    // MARK: - Private
-
     @discardableResult
-    private static func runCLI(args: [String], timeout: TimeInterval = 30) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            // `Process.waitUntilExit()` is blocking. Keep it off the MainActor
-            // so Settings remains responsive while npx/bun resolves the CLI.
-            DispatchQueue.global(qos: .userInitiated).async {
-                guard let runtime = RuntimeDetector.detect() else {
-                    continuation.resume(throwing: CLIError.noRuntime)
-                    return
-                }
-
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: runtime.executablePath)
-                process.arguments = RuntimeDetector.arguments(runtimeName: runtime.name, command: args)
-
-                // Inherit environment with runtime dir in PATH
-                var env = ProcessInfo.processInfo.environment
-                let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
-                if let existingPath = env["PATH"] {
-                    env["PATH"] = "\(runtimeDir):\(existingPath)"
-                } else {
-                    env["PATH"] = runtimeDir
-                }
-                env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
-
-                // In dev mode, tell CLI to use config.dev.json
-                #if DEBUG
-                env["VIBE_USAGE_DEV"] = "1"
-                #endif
-                process.environment = env
-
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                let timeoutItem = DispatchWorkItem {
-                    if process.isRunning {
-                        process.terminate()
+    static func runCLI(
+        args: [String],
+        timeout: TimeInterval = 30,
+        environmentOverrides: [String: String] = [:],
+        environmentKeysToRemove: Set<String> = []
+    ) async throws -> String {
+        let control = ProcessControl()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                // `Process.waitUntilExit()` is blocking. Keep it off the MainActor
+                // so Settings remains responsive while npx/bun resolves the CLI.
+                DispatchQueue.global(qos: .userInitiated).async {
+                    guard let runtime = RuntimeDetector.detect() else {
+                        continuation.resume(throwing: CLIError.noRuntime)
+                        return
                     }
-                }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
 
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    timeoutItem.cancel()
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: runtime.executablePath)
+                    process.arguments = RuntimeDetector.arguments(runtimeName: runtime.name, command: args)
 
-                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                    let stderr = String(data: stderrData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: stdout)
+                    // Inherit environment with runtime dir in PATH
+                    var env = ProcessInfo.processInfo.environment
+                    let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
+                    if let existingPath = env["PATH"] {
+                        env["PATH"] = "\(runtimeDir):\(existingPath)"
                     } else {
-                        let msg = stderr.isEmpty ? "Exit code \(process.terminationStatus)" : stderr
-                        continuation.resume(throwing: CLIError.processFailure(msg))
+                        env["PATH"] = runtimeDir
                     }
-                } catch {
-                    timeoutItem.cancel()
-                    continuation.resume(throwing: CLIError.processFailure(error.localizedDescription))
+                    env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
+                    environmentKeysToRemove.forEach { env.removeValue(forKey: $0) }
+                    env.merge(environmentOverrides) { _, overrideValue in overrideValue }
+
+                    // In dev mode, tell CLI to use config.dev.json
+                    #if DEBUG
+                    env["VIBE_USAGE_DEV"] = "1"
+                    #endif
+                    process.environment = env
+
+                    let stdoutPipe = Pipe()
+                    let stderrPipe = Pipe()
+                    process.standardOutput = stdoutPipe
+                    process.standardError = stderrPipe
+
+                    guard control.register(process) else {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
+                    defer { control.unregister(process) }
+
+                    var timeoutItem: DispatchWorkItem?
+                    do {
+                        try process.run()
+                        control.stopIfRequested()
+                        let item = DispatchWorkItem { control.timeout() }
+                        timeoutItem = item
+                        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: item)
+                        process.waitUntilExit()
+                        item.cancel()
+
+                        if control.wasCancelled {
+                            continuation.resume(throwing: CancellationError())
+                            return
+                        }
+                        if control.didTimeOut {
+                            continuation.resume(throwing: CLIError.timeout)
+                            return
+                        }
+
+                        let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                        let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                        let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
+                        let stderr = String(data: stderrData, encoding: .utf8)?
+                            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+                        if process.terminationStatus == 0 {
+                            continuation.resume(returning: stdout)
+                        } else {
+                            let msg = stderr.isEmpty ? "Exit code \(process.terminationStatus)" : stderr
+                            continuation.resume(throwing: CLIError.processFailure(msg))
+                        }
+                    } catch {
+                        timeoutItem?.cancel()
+                        if control.wasCancelled {
+                            continuation.resume(throwing: CancellationError())
+                        } else {
+                            continuation.resume(throwing: CLIError.processFailure(error.localizedDescription))
+                        }
+                    }
                 }
             }
+        } onCancel: {
+            control.cancel()
+        }
+    }
+
+    /// Bridges structured-concurrency cancellation and the timeout deadline to
+    /// Foundation `Process` without sharing mutable state unsafely.
+    private final class ProcessControl: @unchecked Sendable {
+        private let lock = NSLock()
+        private var process: Process?
+        private var cancellationRequested = false
+        private var timeoutRequested = false
+
+        var wasCancelled: Bool {
+            lock.withLock { cancellationRequested }
+        }
+
+        var didTimeOut: Bool {
+            lock.withLock { timeoutRequested }
+        }
+
+        func register(_ process: Process) -> Bool {
+            lock.withLock {
+                guard !cancellationRequested else { return false }
+                self.process = process
+                return true
+            }
+        }
+
+        func unregister(_ process: Process) {
+            lock.withLock {
+                if self.process === process { self.process = nil }
+            }
+        }
+
+        func stopIfRequested() {
+            let process = lock.withLock {
+                cancellationRequested || timeoutRequested ? self.process : nil
+            }
+            if let process, process.isRunning { process.terminate() }
+        }
+
+        func cancel() {
+            let process = lock.withLock { () -> Process? in
+                cancellationRequested = true
+                return self.process
+            }
+            if let process, process.isRunning { process.terminate() }
+        }
+
+        func timeout() {
+            let process = lock.withLock { () -> Process? in
+                guard !cancellationRequested,
+                      let process = self.process,
+                      process.isRunning
+                else { return nil }
+                timeoutRequested = true
+                return process
+            }
+            if let process, process.isRunning { process.terminate() }
         }
     }
 }

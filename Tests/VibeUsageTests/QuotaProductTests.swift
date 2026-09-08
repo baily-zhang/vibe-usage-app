@@ -3,6 +3,12 @@ import Testing
 @testable import VibeUsage
 
 struct QuotaProductTests {
+    private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
+        var value: String?
+        func load() throws -> String? { value }
+        func store(_ value: String?) throws { self.value = value }
+    }
+
     private func defaults() -> (UserDefaults, String) {
         let suite = "QuotaProductTests.\(UUID().uuidString)"
         return (UserDefaults(suiteName: suite)!, suite)
@@ -30,7 +36,7 @@ struct QuotaProductTests {
             products: products(detected: [.codex, .kimiCode, .cursorGrok])
         )
 
-        #expect(selection == [.codex])
+        #expect(selection == [.codex, .kimiCode])
         #expect(defaults.bool(forKey: QuotaSelectionPreferences.initializedKey))
     }
 
@@ -119,6 +125,25 @@ struct QuotaProductTests {
         #expect(byProvider[.kimiCode]?.isDetected == true)
         #expect(byProvider[.cursorGrok]?.isDetected == true)
         #expect(byProvider[.zCode]?.isDetected == false)
-        #expect(byProvider[.kimiCode]?.isSelectable == false)
+        #expect(byProvider[.kimiCode]?.isSelectable == true)
+    }
+
+    @Test @MainActor
+    func zCodeRequiresAnExplicitAppOwnedKeyBeforeSelection() throws {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keyStore = MemoryZCodeKeyStore()
+        let appState = AppState(quotaDefaults: defaults, zCodeAPIKeyStore: keyStore)
+        let product = QuotaProduct(provider: .zCode, availability: .ready, isDetected: true)
+
+        #expect(appState.quotaProductStatusText(product) == "需配置 Z.ai API Key")
+        try appState.storeZCodeAPIKey("  fixture-key  ")
+        #expect(keyStore.value == "fixture-key")
+        #expect(appState.zCodeAPIKeyForQuotaFetch() == "fixture-key")
+        #expect(appState.quotaProductStatusText(product) == "已检测 · API Key 已配置")
+
+        try appState.storeZCodeAPIKey(nil)
+        #expect(keyStore.value == nil)
+        #expect(!appState.zCodeAPIKeyConfigured)
     }
 }

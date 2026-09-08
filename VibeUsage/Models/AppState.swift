@@ -170,6 +170,8 @@ final class AppState {
     /// user-perceivable and needs an indicator.
     var isCodexRateLimitRefreshing: Bool = false
     var isClaudeRateLimitRefreshing: Bool = false
+    var cliQuotaRefreshingProviders: Set<ProviderRateLimit.Provider> = []
+    private(set) var zCodeAPIKeyConfigured = false
 
     /// Compatibility projections for the native provider adapters. The source
     /// of truth is the ordered selector above; these keep the existing readers
@@ -226,18 +228,26 @@ final class AppState {
     private var config: VibeUsageConfig?
     private let usageFetcher: (String, String, UsageQueryRange) async throws -> UsageResponse
     private let quotaDefaults: UserDefaults
+    private let zCodeAPIKeyStore: any ZCodeAPIKeyStoring
+    private let quotaProductDiscoverer: () -> [QuotaProduct]
 
     init(
         initialConfig: VibeUsageConfig? = nil,
         usageFetcher: @escaping (String, String, UsageQueryRange) async throws -> UsageResponse = { apiUrl, apiKey, range in
             try await APIClient(baseURL: apiUrl, apiKey: apiKey).fetchUsage(range: range)
         },
-        quotaDefaults: UserDefaults = .standard
+        quotaDefaults: UserDefaults = .standard,
+        zCodeAPIKeyStore: any ZCodeAPIKeyStoring = KeychainZCodeAPIKeyStore(),
+        quotaProductDiscoverer: @escaping () -> [QuotaProduct] = {
+            QuotaProductRegistry.discover()
+        }
     ) {
         self.config = initialConfig
         self.isConfigured = initialConfig?.apiKey != nil
         self.usageFetcher = usageFetcher
         self.quotaDefaults = quotaDefaults
+        self.zCodeAPIKeyStore = zCodeAPIKeyStore
+        self.quotaProductDiscoverer = quotaProductDiscoverer
     }
 
     // MARK: - Lifecycle
@@ -247,11 +257,7 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
-        self.quotaProducts = QuotaProductRegistry.discover()
-        self.selectedQuotaProviders = QuotaSelectionPreferences.resolve(
-            defaults: quotaDefaults,
-            products: quotaProducts
-        )
+        initializeQuotaProducts()
         self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
         // Hand back the `statusLine.command` edit the pre-probe releases made.
@@ -274,6 +280,27 @@ final class AppState {
         if !selectedQuotaProviders.isEmpty {
             startRateLimitCoordinator()
         }
+    }
+
+    /// Initializes only local quota discovery, app-owned key state, and the
+    /// persisted two-slot selection. Kept separate from account/sync startup
+    /// so this policy can be tested without touching real user configuration.
+    func initializeQuotaProducts() {
+        self.quotaProducts = quotaProductDiscoverer()
+        self.zCodeAPIKeyConfigured = (try? zCodeAPIKeyStore.load()) != nil
+        // On a fresh install, a detected ZCode client without an explicitly
+        // configured API key must not consume one of the two default slots.
+        // Stored/migrated selections still round-trip exactly.
+        let initiallySelectableProducts = quotaProducts.map { product in
+            guard product.provider == .zCode, !zCodeAPIKeyConfigured else { return product }
+            var unavailable = product
+            unavailable.availability = .pendingProtocol
+            return unavailable
+        }
+        self.selectedQuotaProviders = QuotaSelectionPreferences.resolve(
+            defaults: quotaDefaults,
+            products: initiallySelectableProducts
+        )
     }
 
     /// Save config to disk and start scheduler.
@@ -410,7 +437,8 @@ final class AppState {
         switch provider {
         case .codex: return isCodexRateLimitRefreshing
         case .claudeCode: return isClaudeRateLimitRefreshing
-        case .kimiCode, .zCode, .cursorGrok: return false
+        case .kimiCode, .zCode: return cliQuotaRefreshingProviders.contains(provider)
+        case .cursorGrok: return false
         }
     }
 
@@ -419,7 +447,31 @@ final class AppState {
         guard selectedQuotaProviders.count < QuotaSelectionPreferences.maximumSelectionCount else {
             return false
         }
+        if provider == .zCode, !zCodeAPIKeyConfigured { return false }
         return quotaProducts.first(where: { $0.provider == provider })?.isSelectable == true
+    }
+
+    func quotaProductStatusText(_ product: QuotaProduct) -> String {
+        guard product.provider == .zCode, product.availability == .ready else {
+            return product.statusText
+        }
+        if !product.isDetected { return zCodeAPIKeyConfigured ? "未检测到 · API Key 已配置" : "未检测到" }
+        return zCodeAPIKeyConfigured ? "已检测 · API Key 已配置" : "需配置 Z.ai API Key"
+    }
+
+    func zCodeAPIKeyForQuotaFetch() -> String? {
+        try? zCodeAPIKeyStore.load()
+    }
+
+    func storeZCodeAPIKey(_ value: String?) throws {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        try zCodeAPIKeyStore.store(trimmed.isEmpty ? nil : trimmed)
+        zCodeAPIKeyConfigured = !trimmed.isEmpty
+        if trimmed.isEmpty, isQuotaProviderSelected(.zCode) {
+            updateQuotaSelection(provider: .zCode, selected: false)
+            rateLimitCoordinator?.cancelRefresh(for: .zCode)
+            removeRateLimit(for: .zCode)
+        }
     }
 
     /// Re-run only the local filesystem checks. Newly found products are never
@@ -446,10 +498,10 @@ final class AppState {
         case .claudeCode:
             guard claudeRateLimitEnabled else { return }
             await rateLimitCoordinator?.refreshClaude()
-        case .kimiCode, .zCode, .cursorGrok:
-            // Listed so discovery and selection UI remain forward-compatible;
-            // network access begins only after each CLI protocol adapter lands.
-            return
+        case .kimiCode, .zCode:
+            guard isQuotaProviderSelected(provider) else { return }
+            await rateLimitCoordinator?.refreshCLIProviders([provider])
+        case .cursorGrok: return
         }
     }
 

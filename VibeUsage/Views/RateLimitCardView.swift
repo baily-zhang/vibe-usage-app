@@ -56,7 +56,7 @@ struct RateLimitCardView: View {
                     }
                 } label: {
                     Label(
-                        "\(product.displayName) · \(product.statusText)",
+                        "\(product.displayName) · \(appState.quotaProductStatusText(product))",
                         systemImage: selected ? "checkmark" : "circle"
                     )
                 }
@@ -218,15 +218,13 @@ private struct ProviderCard: View {
             // landing for a snapshot persisted by an older build.
             messageContent(text: "订阅配额未启用", action: "重试")
         case .unauthorized:
-            // Only Codex reaches this state today: the live endpoint rejected
-            // the token even after re-reading auth.json. The accurate remedy is
-            // "use the CLI once" — the CLI silently refreshes its own token on
-            // next use (we are a read-only consumer of its credentials and
-            // never run the refresh grant ourselves), and if the session is
-            // truly revoked, opening the CLI surfaces the re-login prompt too.
-            // Telling the user to "re-login" would be wrong advice in the
-            // common expired-while-idle case.
-            messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
+            if snapshot.provider == .zCode {
+                messageContent(text: "请在设置中更新 Z.ai API Key", action: "重试")
+            } else {
+                // Read-only OAuth consumers never refresh another product's
+                // credential. Kimi/Codex owns the next refresh or login.
+                messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
+            }
         case .retryableError:
             messageContent(text: "暂时无法读取订阅配额", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")

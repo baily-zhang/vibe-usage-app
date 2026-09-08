@@ -55,4 +55,18 @@ final class CLIBridgeTests: XCTestCase {
         let rootsAfterRemoval = try await CLIBridge.configRoots()
         XCTAssertNil(rootsAfterRemoval["grok"])
     }
+
+    func testQuotaCommandAgainstLocalCLI() async throws {
+        guard ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] != nil else {
+            throw XCTSkip("需要本地 CLI 路径")
+        }
+
+        let snapshots = try await QuotaCLIBridge.fetch(
+            providers: [.kimiCode],
+            zCodeAPIKey: nil
+        )
+
+        XCTAssertEqual(snapshots.map(\.provider), [.kimiCode])
+        XCTAssertEqual(snapshots.first?.status, .unauthorized)
+    }
 }
