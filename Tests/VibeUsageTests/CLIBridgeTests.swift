@@ -61,12 +61,16 @@ final class CLIBridgeTests: XCTestCase {
             throw XCTSkip("需要本地 CLI 路径")
         }
 
+        // Exercise the local CLI contract without depending on whether this
+        // machine happens to be logged into Kimi. ZCode with no caller-owned
+        // key is deterministic and must never consult another app's login.
         let snapshots = try await QuotaCLIBridge.fetch(
-            providers: [.kimiCode],
-            zCodeAPIKey: nil
+            providers: [.zCode],
+            zCodeAPIKey: nil,
+            zCodeRegion: .bigModel
         )
 
-        XCTAssertEqual(snapshots.map(\.provider), [.kimiCode])
+        XCTAssertEqual(snapshots.map(\.provider), [.zCode])
         XCTAssertEqual(snapshots.first?.status, .unauthorized)
     }
 }

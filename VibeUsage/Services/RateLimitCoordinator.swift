@@ -40,7 +40,7 @@ final class RateLimitCoordinator {
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
     private let fetchCLIQuotas: @MainActor (
-        [ProviderRateLimit.Provider], String?
+        [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
     ) async throws -> [ProviderRateLimit]
 
     init(
@@ -61,9 +61,13 @@ final class RateLimitCoordinator {
             await RateLimitCoordinator.loadClaudeDiskSnapshot()
         },
         fetchCLIQuotas: @escaping @MainActor (
-            [ProviderRateLimit.Provider], String?
-        ) async throws -> [ProviderRateLimit] = { providers, zCodeAPIKey in
-            try await QuotaCLIBridge.fetch(providers: providers, zCodeAPIKey: zCodeAPIKey)
+            [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
+        ) async throws -> [ProviderRateLimit] = { providers, zCodeAPIKey, zCodeRegion in
+            try await QuotaCLIBridge.fetch(
+                providers: providers,
+                zCodeAPIKey: zCodeAPIKey,
+                zCodeRegion: zCodeRegion
+            )
         }
     ) {
         self.appState = appState
@@ -335,7 +339,11 @@ final class RateLimitCoordinator {
         TestDiagnosticLog.recordQuotaRefreshStarted(providers)
         #endif
         do {
-            let snapshots = try await fetchCLIQuotas(providers, appState.zCodeAPIKeyForQuotaFetch())
+            let snapshots = try await fetchCLIQuotas(
+                providers,
+                appState.zCodeAPIKeyForQuotaFetch(),
+                appState.zCodeQuotaRegion
+            )
             guard !Task.isCancelled else { return }
             for provider in providers where appState.isQuotaProviderSelected(provider) {
                 if let snapshot = snapshots.first(where: { $0.provider == provider }) {

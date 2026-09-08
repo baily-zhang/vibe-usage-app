@@ -172,6 +172,7 @@ final class AppState {
     var isClaudeRateLimitRefreshing: Bool = false
     var cliQuotaRefreshingProviders: Set<ProviderRateLimit.Provider> = []
     private(set) var zCodeAPIKeyConfigured = false
+    private(set) var zCodeQuotaRegion: ZCodeQuotaRegion = .bigModel
 
     /// Compatibility projections for the native provider adapters. The source
     /// of truth is the ordered selector above; these keep the existing readers
@@ -287,7 +288,16 @@ final class AppState {
     /// so this policy can be tested without touching real user configuration.
     func initializeQuotaProducts() {
         self.quotaProducts = quotaProductDiscoverer()
-        self.zCodeAPIKeyConfigured = (try? zCodeAPIKeyStore.load()) != nil
+        let persistedRegion = quotaDefaults.string(forKey: ZCodeQuotaRegion.defaultsKey)
+            .flatMap(ZCodeQuotaRegion.init(rawValue:))
+        // Existing releases stored only a Z.ai key. Preserve that region on
+        // upgrade; a fresh setup starts on BigModel but performs no request
+        // until the user explicitly saves a key and selects ZCode.
+        let legacyZAIKeyExists = (try? zCodeAPIKeyStore.load(for: .zAI)) != nil
+        self.zCodeQuotaRegion = persistedRegion ?? (legacyZAIKeyExists ? .zAI : .bigModel)
+        self.zCodeAPIKeyConfigured = (
+            try? zCodeAPIKeyStore.load(for: zCodeQuotaRegion)
+        ) != nil
         // On a fresh install, a detected ZCode client without an explicitly
         // configured API key must not consume one of the two default slots.
         // Stored/migrated selections still round-trip exactly.
@@ -456,21 +466,44 @@ final class AppState {
             return product.statusText
         }
         if !product.isDetected { return zCodeAPIKeyConfigured ? "未检测到 · API Key 已配置" : "未检测到" }
-        return zCodeAPIKeyConfigured ? "已检测 · API Key 已配置" : "需配置 Z.ai API Key"
+        return zCodeAPIKeyConfigured
+            ? "已检测 · \(zCodeQuotaRegion.displayName) 已配置"
+            : "需配置 \(zCodeQuotaRegion.apiKeyName)"
     }
 
     func zCodeAPIKeyForQuotaFetch() -> String? {
-        try? zCodeAPIKeyStore.load()
+        try? zCodeAPIKeyStore.load(for: zCodeQuotaRegion)
     }
 
     func storeZCodeAPIKey(_ value: String?) throws {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        try zCodeAPIKeyStore.store(trimmed.isEmpty ? nil : trimmed)
+        try zCodeAPIKeyStore.store(trimmed.isEmpty ? nil : trimmed, for: zCodeQuotaRegion)
         zCodeAPIKeyConfigured = !trimmed.isEmpty
         if trimmed.isEmpty, isQuotaProviderSelected(.zCode) {
             updateQuotaSelection(provider: .zCode, selected: false)
             rateLimitCoordinator?.cancelRefresh(for: .zCode)
             removeRateLimit(for: .zCode)
+        }
+    }
+
+    /// Switches the ZCode account region without moving or sharing secrets
+    /// between regional Keychain items. A configured target refreshes in place;
+    /// an unconfigured target releases its selection slot until a key is saved.
+    func setZCodeQuotaRegion(_ region: ZCodeQuotaRegion) async {
+        guard region != zCodeQuotaRegion else { return }
+        let wasSelected = isQuotaProviderSelected(.zCode)
+        rateLimitCoordinator?.cancelRefresh(for: .zCode)
+        removeRateLimit(for: .zCode)
+
+        zCodeQuotaRegion = region
+        quotaDefaults.set(region.rawValue, forKey: ZCodeQuotaRegion.defaultsKey)
+        zCodeAPIKeyConfigured = (try? zCodeAPIKeyStore.load(for: region)) != nil
+
+        if wasSelected, !zCodeAPIKeyConfigured {
+            updateQuotaSelection(provider: .zCode, selected: false)
+        } else if wasSelected {
+            rateLimitCoordinator?.seedPlaceholder(for: .zCode)
+            await refreshRateLimit(for: .zCode)
         }
     }
 

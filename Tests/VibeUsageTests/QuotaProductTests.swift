@@ -4,9 +4,11 @@ import Testing
 
 struct QuotaProductTests {
     private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
-        var value: String?
-        func load() throws -> String? { value }
-        func store(_ value: String?) throws { self.value = value }
+        var values: [ZCodeQuotaRegion: String] = [:]
+        func load(for region: ZCodeQuotaRegion) throws -> String? { values[region] }
+        func store(_ value: String?, for region: ZCodeQuotaRegion) throws {
+            values[region] = value
+        }
     }
 
     private func defaults() -> (UserDefaults, String) {
@@ -136,14 +138,37 @@ struct QuotaProductTests {
         let appState = AppState(quotaDefaults: defaults, zCodeAPIKeyStore: keyStore)
         let product = QuotaProduct(provider: .zCode, availability: .ready, isDetected: true)
 
-        #expect(appState.quotaProductStatusText(product) == "需配置 Z.ai API Key")
+        #expect(appState.quotaProductStatusText(product) == "需配置 BigModel API Key")
         try appState.storeZCodeAPIKey("  fixture-key  ")
-        #expect(keyStore.value == "fixture-key")
+        #expect(keyStore.values[.bigModel] == "fixture-key")
         #expect(appState.zCodeAPIKeyForQuotaFetch() == "fixture-key")
-        #expect(appState.quotaProductStatusText(product) == "已检测 · API Key 已配置")
+        #expect(appState.quotaProductStatusText(product) == "已检测 · BigModel（国内） 已配置")
 
         try appState.storeZCodeAPIKey(nil)
-        #expect(keyStore.value == nil)
+        #expect(keyStore.values[.bigModel] == nil)
         #expect(!appState.zCodeAPIKeyConfigured)
+    }
+
+    @Test @MainActor
+    func existingZAIKeyKeepsItsRegionWhileBigModelUsesASeparateSecret() async throws {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let keyStore = MemoryZCodeKeyStore()
+        keyStore.values[.zAI] = "legacy-zai-key"
+        keyStore.values[.bigModel] = "domestic-key"
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: keyStore,
+            quotaProductDiscoverer: { self.products(detected: [.zCode]) }
+        )
+
+        appState.initializeQuotaProducts()
+        #expect(appState.zCodeQuotaRegion == .zAI)
+        #expect(appState.zCodeAPIKeyForQuotaFetch() == "legacy-zai-key")
+
+        await appState.setZCodeQuotaRegion(.bigModel)
+        #expect(appState.zCodeQuotaRegion == .bigModel)
+        #expect(appState.zCodeAPIKeyForQuotaFetch() == "domestic-key")
+        #expect(keyStore.values[.zAI] == "legacy-zai-key")
     }
 }

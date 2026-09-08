@@ -4,10 +4,12 @@ import Testing
 
 struct RateLimitCoordinatorTests {
     private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
-        var value: String?
-        init(value: String? = nil) { self.value = value }
-        func load() throws -> String? { value }
-        func store(_ value: String?) throws { self.value = value }
+        var values: [ZCodeQuotaRegion: String] = [:]
+        init(value: String? = nil) { values[.bigModel] = value }
+        func load(for region: ZCodeQuotaRegion) throws -> String? { values[region] }
+        func store(_ value: String?, for region: ZCodeQuotaRegion) throws {
+            values[region] = value
+        }
     }
 
     @MainActor
@@ -244,7 +246,7 @@ struct RateLimitCoordinatorTests {
         var fetchCount = 0
         let coordinator = RateLimitCoordinator(
             appState: appState,
-            fetchCLIQuotas: { _, _ in
+            fetchCLIQuotas: { _, _, _ in
                 fetchCount += 1
                 return []
             }
@@ -281,9 +283,10 @@ struct RateLimitCoordinatorTests {
         )
         let coordinator = RateLimitCoordinator(
             appState: appState,
-            fetchCLIQuotas: { providers, key in
+            fetchCLIQuotas: { providers, key, region in
                 #expect(providers == [.kimiCode, .zCode])
                 #expect(key == "fixture-key")
+                #expect(region == .bigModel)
                 return [kimi, zCode]
             }
         )
@@ -306,7 +309,7 @@ struct RateLimitCoordinatorTests {
         var firstRequestStarted = false
         let coordinator = RateLimitCoordinator(
             appState: appState,
-            fetchCLIQuotas: { providers, _ in
+            fetchCLIQuotas: { providers, _, _ in
                 calls.append(providers)
                 firstRequestStarted = true
                 try await Task.sleep(for: .seconds(30))

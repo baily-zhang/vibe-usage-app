@@ -1,9 +1,46 @@
 import Foundation
 import Security
 
+enum ZCodeQuotaRegion: String, CaseIterable, Identifiable {
+    case bigModel = "bigmodel"
+    case zAI = "zai"
+
+    static let defaultsKey = "zCodeQuotaRegion"
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .bigModel: "BigModel（国内）"
+        case .zAI: "Z.ai（海外）"
+        }
+    }
+
+    var apiKeyName: String {
+        switch self {
+        case .bigModel: "BigModel API Key"
+        case .zAI: "Z.ai API Key"
+        }
+    }
+
+    var environmentKey: String {
+        switch self {
+        case .bigModel: "BIGMODEL_API_KEY"
+        case .zAI: "Z_AI_API_KEY"
+        }
+    }
+
+    fileprivate var keychainAccount: String {
+        switch self {
+        case .bigModel: "zcode-bigmodel-api-key"
+        case .zAI: "zcode-zai-api-key"
+        }
+    }
+}
+
 protocol ZCodeAPIKeyStoring {
-    func load() throws -> String?
-    func store(_ value: String?) throws
+    func load(for region: ZCodeQuotaRegion) throws -> String?
+    func store(_ value: String?, for region: ZCodeQuotaRegion) throws
 }
 
 enum ZCodeAPIKeyStoreError: LocalizedError {
@@ -13,7 +50,7 @@ enum ZCodeAPIKeyStoreError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .keychain(let status): return "无法访问钥匙串（\(status)）"
-        case .invalidData: return "钥匙串中的 Z.ai API Key 格式无效"
+        case .invalidData: return "钥匙串中的 ZCode API Key 格式无效"
         }
     }
 }
@@ -22,14 +59,13 @@ enum ZCodeAPIKeyStoreError: LocalizedError {
 /// reads ZCode's own auth database or another application's Keychain items.
 struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
     private let service = "ai.vibecafe.vibe-usage"
-    private let account = "zcode-zai-api-key"
 
-    func load() throws -> String? {
+    func load(for region: ZCodeQuotaRegion) throws -> String? {
         var result: CFTypeRef?
         let status = SecItemCopyMatching([
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: region.keychainAccount,
             kSecMatchLimit as String: kSecMatchLimitOne,
             kSecReturnData as String: true,
         ] as CFDictionary, &result)
@@ -42,11 +78,11 @@ struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    func store(_ value: String?) throws {
+    func store(_ value: String?, for region: ZCodeQuotaRegion) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
+            kSecAttrAccount as String: region.keychainAccount,
         ]
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {

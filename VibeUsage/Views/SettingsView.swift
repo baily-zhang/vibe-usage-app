@@ -241,12 +241,29 @@ struct SettingsView: View {
                 if appState.quotaProducts.first(where: { $0.provider == .zCode })?.isDetected == true
                     || appState.zCodeAPIKeyConfigured {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text("ZCode 使用用户明确提供的 Z.ai API Key；不会读取 ZCode 登录凭据。")
+                        Text("ZCode 使用用户明确提供的区域 API Key；不会读取 ZCode 登录凭据，也不会向另一区域试发。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Picker("账号区域", selection: Binding(
+                            get: { appState.zCodeQuotaRegion },
+                            set: { region in
+                                zCodeAPIKey = ""
+                                zCodeAPIKeyMessage = nil
+                                zCodeAPIKeyError = nil
+                                Task { await appState.setZCodeQuotaRegion(region) }
+                            }
+                        )) {
+                            ForEach(ZCodeQuotaRegion.allCases) { region in
+                                Text(region.displayName).tag(region)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(isSavingZCodeAPIKey)
                         HStack(spacing: 8) {
                             SecureField(
-                                appState.zCodeAPIKeyConfigured ? "输入新 Key 以更新" : "Z.ai API Key",
+                                appState.zCodeAPIKeyConfigured
+                                    ? "输入新 Key 以更新"
+                                    : appState.zCodeQuotaRegion.apiKeyName,
                                 text: $zCodeAPIKey
                             )
                             Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
@@ -284,7 +301,7 @@ struct SettingsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("最多选择两个产品；未选择的产品不会联网读取配额。")
-                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 需配置 Z.ai API Key；Grok（Cursor）暂不使用 Cookie 等高权限方式接入。")
+                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key；Grok（Cursor）暂不使用 Cookie 等高权限方式接入。")
                 }
                 .font(.caption)
             }

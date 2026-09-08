@@ -81,13 +81,22 @@ struct QuotaCLIBridgeTests {
             zCodeAPIKey: "secret-fixture"
         )
         #expect(kimiOnly.overrides.isEmpty)
-        #expect(kimiOnly.keysToRemove == ["Z_AI_API_KEY"])
+        #expect(kimiOnly.keysToRemove == ["BIGMODEL_API_KEY", "Z_AI_API_KEY"])
 
-        let zCode = QuotaCLIBridge.quotaEnvironment(
+        let zAI = QuotaCLIBridge.quotaEnvironment(
             providers: [.zCode],
-            zCodeAPIKey: "  secret-fixture  "
+            zCodeAPIKey: "  secret-fixture  ",
+            zCodeRegion: .zAI
         )
-        #expect(zCode.overrides == ["Z_AI_API_KEY": "secret-fixture"])
-        #expect(zCode.keysToRemove.isEmpty)
+        #expect(zAI.overrides == ["Z_AI_API_KEY": "secret-fixture"])
+        #expect(zAI.keysToRemove == ["BIGMODEL_API_KEY"])
+
+        let bigModel = QuotaCLIBridge.quotaEnvironment(
+            providers: [.zCode],
+            zCodeAPIKey: "bigmodel-secret",
+            zCodeRegion: .bigModel
+        )
+        #expect(bigModel.overrides == ["BIGMODEL_API_KEY": "bigmodel-secret"])
+        #expect(bigModel.keysToRemove == ["Z_AI_API_KEY"])
     }
 }

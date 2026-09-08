@@ -44,11 +44,16 @@ enum QuotaCLIBridge {
 
     static func fetch(
         providers: [ProviderRateLimit.Provider],
-        zCodeAPIKey: String?
+        zCodeAPIKey: String?,
+        zCodeRegion: ZCodeQuotaRegion = .zAI
     ) async throws -> [ProviderRateLimit] {
         let supported = providers.filter { $0 == .kimiCode || $0 == .zCode }
         guard !supported.isEmpty else { return [] }
-        let environment = quotaEnvironment(providers: supported, zCodeAPIKey: zCodeAPIKey)
+        let environment = quotaEnvironment(
+            providers: supported,
+            zCodeAPIKey: zCodeAPIKey,
+            zCodeRegion: zCodeRegion
+        )
         var arguments = ["quota", "fetch"]
         for provider in supported {
             arguments += ["--product", provider.rawValue]
@@ -63,17 +68,23 @@ enum QuotaCLIBridge {
         return try snapshots(from: decode(output))
     }
 
-    /// A saved Z.ai key is exposed only to a subprocess that was explicitly
-    /// asked to fetch ZCode. Kimi-only calls actively scrub any inherited key.
+    /// A saved regional key is exposed only to a subprocess that was explicitly
+    /// asked to fetch ZCode. The other region and Kimi-only calls actively scrub
+    /// both credential variables so a key can never be sent to the wrong host.
     static func quotaEnvironment(
         providers: [ProviderRateLimit.Provider],
-        zCodeAPIKey: String?
+        zCodeAPIKey: String?,
+        zCodeRegion: ZCodeQuotaRegion = .zAI
     ) -> (overrides: [String: String], keysToRemove: Set<String>) {
+        let allKeys = Set(ZCodeQuotaRegion.allCases.map(\.environmentKey))
         let key = providers.contains(.zCode)
             ? zCodeAPIKey?.trimmingCharacters(in: .whitespacesAndNewlines)
             : nil
-        guard let key, !key.isEmpty else { return ([:], ["Z_AI_API_KEY"]) }
-        return (["Z_AI_API_KEY": key], [])
+        guard let key, !key.isEmpty else { return ([:], allKeys) }
+        return (
+            [zCodeRegion.environmentKey: key],
+            allKeys.subtracting([zCodeRegion.environmentKey])
+        )
     }
 
     static func decode(_ output: String) throws -> Envelope {
