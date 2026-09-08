@@ -261,6 +261,20 @@ final class AppState {
         initializeQuotaProducts()
         self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
+        #if DEBUG
+        // UI acceptance builds can exercise subscription cards without
+        // reading a production Vibe account config or starting its sync/upload
+        // scheduler. The environment hook is compiled out of Release.
+        if ProcessInfo.processInfo.environment["VIBE_USAGE_QUOTA_UI_TEST"] == "1" {
+            self.isConfigured = true
+            self.hasLoadedUsageData = true
+            if !selectedQuotaProviders.isEmpty {
+                startRateLimitCoordinator()
+            }
+            return
+        }
+        #endif
+
         // Hand back the `statusLine.command` edit the pre-probe releases made.
         LegacyStatuslineRetirement.run()
 
@@ -416,8 +430,9 @@ final class AppState {
 
     /// Update one slot in the main-panel selector. Selection order is display
     /// order, capped at two, and persisted independently from shared CLI config.
-    /// Products without a verified adapter stay visible in the menu but cannot
-    /// be selected yet.
+    /// Products without a verified adapter normally cannot be selected. Cursor
+    /// is the deliberate exception: when detected it may reserve a slot so the
+    /// card can communicate that the official quota protocol is still pending.
     func setQuotaProductSelected(
         _ provider: ProviderRateLimit.Provider,
         selected: Bool
@@ -447,8 +462,8 @@ final class AppState {
         switch provider {
         case .codex: return isCodexRateLimitRefreshing
         case .claudeCode: return isClaudeRateLimitRefreshing
-        case .kimiCode, .zCode: return cliQuotaRefreshingProviders.contains(provider)
-        case .cursorGrok: return false
+        case .kimiCode, .zCode, .grok: return cliQuotaRefreshingProviders.contains(provider)
+        case .cursor: return false
         }
     }
 
@@ -458,6 +473,12 @@ final class AppState {
             return false
         }
         if provider == .zCode, !zCodeAPIKeyConfigured { return false }
+        // Cursor is intentionally selectable once locally detected so users
+        // can reserve a card slot and see the integration state. It remains a
+        // pending product and therefore never joins first-launch auto-selection.
+        if provider == .cursor {
+            return quotaProducts.first(where: { $0.provider == provider })?.isDetected == true
+        }
         return quotaProducts.first(where: { $0.provider == provider })?.isSelectable == true
     }
 
@@ -531,10 +552,10 @@ final class AppState {
         case .claudeCode:
             guard claudeRateLimitEnabled else { return }
             await rateLimitCoordinator?.refreshClaude()
-        case .kimiCode, .zCode:
+        case .kimiCode, .zCode, .grok:
             guard isQuotaProviderSelected(provider) else { return }
             await rateLimitCoordinator?.refreshCLIProviders([provider])
-        case .cursorGrok: return
+        case .cursor: return
         }
     }
 

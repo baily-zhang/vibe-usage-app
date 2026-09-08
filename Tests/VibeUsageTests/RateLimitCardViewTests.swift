@@ -85,4 +85,29 @@ struct RateLimitCardViewTests {
 
         #expect(visible == [.codex])
     }
+
+    @Test
+    func selectedCursorKeepsItsPendingCardVisibleBesideGrok() {
+        let visible = RateLimitCardView.visibleProviders(
+            selected: [.grok, .cursor],
+            snapshots: [
+                snapshot(provider: .grok, status: .ok),
+                snapshot(provider: .cursor, status: .noData),
+            ],
+            refreshing: []
+        )
+
+        #expect(visible == [.grok, .cursor])
+    }
+
+    @Test
+    func cursorPendingStateIsVisibleWhenSelectedAlone() {
+        let visible = RateLimitCardView.visibleProviders(
+            selected: [.cursor],
+            snapshots: [snapshot(provider: .cursor, status: .noData)],
+            refreshing: []
+        )
+
+        #expect(visible == [.cursor])
+    }
 }

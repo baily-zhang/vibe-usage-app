@@ -301,7 +301,8 @@ struct SettingsView: View {
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("最多选择两个产品；未选择的产品不会联网读取配额。")
-                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key；Grok（Cursor）暂不使用 Cookie 等高权限方式接入。")
+                    Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
+                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key。")
                 }
                 .font(.caption)
             }

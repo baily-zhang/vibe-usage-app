@@ -67,7 +67,8 @@ enum QuotaProductRegistry {
         (.claudeCode, .ready),
         (.kimiCode, .ready),
         (.zCode, .ready),
-        (.cursorGrok, .pendingProtocol),
+        (.grok, .ready),
+        (.cursor, .pendingProtocol),
     ]
 
     static func discover(
@@ -116,7 +117,11 @@ enum QuotaProductRegistry {
             relativePaths = [".zcode", ".config/zcode"]
             appNames = ["ZCode.app"]
             executableNames = ["zcode"]
-        case .cursorGrok:
+        case .grok:
+            relativePaths = [".grok"]
+            appNames = []
+            executableNames = ["grok"]
+        case .cursor:
             relativePaths = [".cursor"]
             appNames = ["Cursor.app"]
             executableNames = ["cursor"]
@@ -162,7 +167,11 @@ enum QuotaSelectionPreferences {
         products: [QuotaProduct]
     ) -> [ProviderRateLimit.Provider] {
         if defaults.bool(forKey: initializedKey) {
-            return normalized(storedSelection(defaults: defaults))
+            let selection = normalized(storedSelection(defaults: defaults))
+            // Rewrite normalized ids so one-time aliases such as the former
+            // `cursor-grok` value do not linger indefinitely on disk.
+            persist(selection, defaults: defaults)
+            return selection
         }
 
         let hasLegacySelection = defaults.object(forKey: "codexRateLimitEnabled") != nil
@@ -216,6 +225,12 @@ enum QuotaSelectionPreferences {
         defaults: UserDefaults
     ) -> [ProviderRateLimit.Provider] {
         (defaults.array(forKey: selectedIDsKey) as? [String] ?? [])
-            .compactMap(ProviderRateLimit.Provider.init(rawValue:))
+            .compactMap { storedID in
+                // The pre-split product represented Cursor presence but had no
+                // Grok adapter. Preserve that user choice as Cursor rather than
+                // silently opting the user into a newly fetchable product.
+                if storedID == "cursor-grok" { return .cursor }
+                return ProviderRateLimit.Provider(rawValue: storedID)
+            }
     }
 }

@@ -75,6 +75,36 @@ struct QuotaCLIBridgeTests {
     }
 
     @Test
+    func decodesGrokAsAReadOnlyLocalCLIProvider() throws {
+        let product = QuotaCLIBridge.Product(
+            id: "grok",
+            status: "ok",
+            meters: [.init(
+                id: "subscription-credits",
+                label: "7d",
+                utilization: 30,
+                resetsAt: Date(timeIntervalSince1970: 1_789_344_000),
+                windowSeconds: 604_800
+            )],
+            planLabel: "X Premium+",
+            fetchedAt: Date(timeIntervalSince1970: 1_788_739_200),
+            dataAsOf: Date(timeIntervalSince1970: 1_788_739_200),
+            source: "local"
+        )
+
+        let snapshots = try QuotaCLIBridge.snapshots(from: .init(
+            schemaVersion: 1,
+            products: [product]
+        ))
+        let snapshot = try #require(snapshots.first)
+
+        #expect(snapshot.provider == .grok)
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.planLabel == "X Premium+")
+        #expect(snapshot.meters.first?.window.utilization == 30)
+    }
+
+    @Test
     func exposesZCodeKeyOnlyWhenZCodeIsExplicitlyRequested() {
         let kimiOnly = QuotaCLIBridge.quotaEnvironment(
             providers: [.kimiCode],

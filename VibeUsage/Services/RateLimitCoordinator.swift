@@ -288,13 +288,13 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
-    /// Fetches one versioned CLI envelope for the requested Kimi/ZCode set.
+    /// Fetches one versioned CLI envelope for the requested CLI-backed set.
     /// The CLI isolates provider failures, while this boundary also guards the
     /// current selection before starting and again before publishing results.
     func refreshCLIProviders(_ providers: [ProviderRateLimit.Provider]) async {
         guard let appState else { return }
         let requested = providers.reduce(into: [ProviderRateLimit.Provider]()) { result, provider in
-            guard (provider == .kimiCode || provider == .zCode),
+            guard provider.usesQuotaCLI,
                   appState.isQuotaProviderSelected(provider),
                   !result.contains(provider)
             else { return }
@@ -411,7 +411,7 @@ final class RateLimitCoordinator {
         async let codex: Void = refreshCodex()
         async let claude: Void = refreshClaude()
         async let cli: Void = refreshCLIProviders(
-            appState?.selectedQuotaProviders.filter { $0 == .kimiCode || $0 == .zCode } ?? []
+            appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
         )
         _ = await (codex, claude, cli)
     }
@@ -423,7 +423,7 @@ final class RateLimitCoordinator {
         async let codex: Void = refreshCodexIfNeeded()
         async let claude: Void = refreshClaudeIfNeeded()
         async let cli: Void = refreshCLIProvidersIfNeeded(
-            appState?.selectedQuotaProviders.filter { $0 == .kimiCode || $0 == .zCode } ?? []
+            appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
         )
         _ = await (codex, claude, cli)
     }
@@ -492,9 +492,9 @@ final class RateLimitCoordinator {
             cancelCodexRefresh()
         case .claudeCode:
             cancelClaudeRefresh()
-        case .kimiCode, .zCode:
+        case .kimiCode, .zCode, .grok:
             cancelCLIRefresh()
-        case .cursorGrok: break
+        case .cursor: break
         }
     }
 

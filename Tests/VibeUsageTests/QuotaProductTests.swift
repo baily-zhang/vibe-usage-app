@@ -35,7 +35,7 @@ struct QuotaProductTests {
 
         let selection = QuotaSelectionPreferences.resolve(
             defaults: defaults,
-            products: products(detected: [.codex, .kimiCode, .cursorGrok])
+            products: products(detected: [.codex, .kimiCode, .cursor])
         )
 
         #expect(selection == [.codex, .kimiCode])
@@ -91,6 +91,22 @@ struct QuotaProductTests {
     }
 
     @Test
+    func formerCursorGrokSelectionMigratesToCursorWithoutEnablingGrok() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["cursor-grok"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+
+        let selection = QuotaSelectionPreferences.resolve(
+            defaults: defaults,
+            products: products(detected: [.cursor, .grok])
+        )
+
+        #expect(selection == [.cursor])
+        #expect(defaults.stringArray(forKey: QuotaSelectionPreferences.selectedIDsKey) == ["cursor"])
+    }
+
+    @Test
     func discoveryUsesOnlyLocalPresenceSignals() throws {
         let fileManager = FileManager.default
         let root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -104,6 +120,10 @@ struct QuotaProductTests {
         )
         try fileManager.createDirectory(
             at: home.appendingPathComponent(".kimi", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: home.appendingPathComponent(".grok", isDirectory: true),
             withIntermediateDirectories: true
         )
         try fileManager.createDirectory(
@@ -125,9 +145,31 @@ struct QuotaProductTests {
 
         #expect(byProvider[.codex]?.isDetected == true)
         #expect(byProvider[.kimiCode]?.isDetected == true)
-        #expect(byProvider[.cursorGrok]?.isDetected == true)
+        #expect(byProvider[.grok]?.isDetected == true)
+        #expect(byProvider[.cursor]?.isDetected == true)
         #expect(byProvider[.zCode]?.isDetected == false)
         #expect(byProvider[.kimiCode]?.isSelectable == true)
+        #expect(byProvider[.grok]?.isSelectable == true)
+        #expect(byProvider[.cursor]?.isSelectable == false)
+    }
+
+    @Test @MainActor
+    func detectedCursorCanBeChosenManuallyButIsNotAutoSelected() async {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.products(detected: [.cursor]) }
+        )
+
+        appState.initializeQuotaProducts()
+        #expect(appState.selectedQuotaProviders.isEmpty)
+        #expect(appState.canSelectQuotaProvider(.cursor))
+
+        await appState.setQuotaProductSelected(.cursor, selected: true)
+        #expect(appState.selectedQuotaProviders == [.cursor])
+        #expect(appState.rateLimits.first(where: { $0.provider == .cursor })?.status == .noData)
     }
 
     @Test @MainActor

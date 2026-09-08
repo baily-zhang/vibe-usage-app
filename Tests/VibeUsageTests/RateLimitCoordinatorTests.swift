@@ -259,6 +259,39 @@ struct RateLimitCoordinatorTests {
     }
 
     @Test @MainActor
+    func selectedGrokUsesCLIWhileCursorNeverStartsIt() async {
+        let (appState, defaults, suite) = selectedAppState([.grok, .cursor])
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var calls: [[ProviderRateLimit.Provider]] = []
+        let grok = ProviderRateLimit(
+            provider: .grok,
+            meters: [RateLimitMeter(
+                id: "subscription-credits",
+                label: "7d",
+                window: RateLimitWindow(utilization: 30)
+            )],
+            planLabel: "X Premium+",
+            status: .ok,
+            fetchedAt: Date(),
+            dataAsOf: Date()
+        )
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { providers, key, _ in
+                calls.append(providers)
+                #expect(key == nil)
+                return [grok]
+            }
+        )
+
+        await coordinator.refreshCLIProviders([.grok, .cursor])
+
+        #expect(calls == [[.grok]])
+        #expect(appState.rateLimits.first(where: { $0.provider == .grok }) == grok)
+        #expect(appState.rateLimits.allSatisfy { $0.provider != .cursor })
+    }
+
+    @Test @MainActor
     func cliProviderFailureDoesNotReplaceAnotherProvidersSuccess() async {
         let (appState, defaults, suite) = selectedAppState(
             [.kimiCode, .zCode],

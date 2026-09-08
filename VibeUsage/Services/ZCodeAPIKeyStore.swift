@@ -58,7 +58,25 @@ enum ZCodeAPIKeyStoreError: LocalizedError {
 /// Stores only the key the user explicitly enters in Vibe Usage. It never
 /// reads ZCode's own auth database or another application's Keychain items.
 struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
-    private let service = "ai.vibecafe.vibe-usage"
+    private let service: String
+
+    init(environment: [String: String] = ProcessInfo.processInfo.environment) {
+        #if DEBUG
+        // A locally re-signed test app must not query the release app's saved
+        // item: macOS would correctly ask the user to approve the unfamiliar
+        // signature. UI tests can opt into an empty, isolated namespace; the
+        // hook and environment key are absent from Release binaries.
+        let testService = environment["VIBE_USAGE_TEST_KEYCHAIN_SERVICE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let testService, !testService.isEmpty {
+            self.service = testService
+        } else {
+            self.service = "ai.vibecafe.vibe-usage"
+        }
+        #else
+        self.service = "ai.vibecafe.vibe-usage"
+        #endif
+    }
 
     func load(for region: ZCodeQuotaRegion) throws -> String? {
         var result: CFTypeRef?

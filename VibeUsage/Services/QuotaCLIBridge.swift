@@ -47,7 +47,7 @@ enum QuotaCLIBridge {
         zCodeAPIKey: String?,
         zCodeRegion: ZCodeQuotaRegion = .zAI
     ) async throws -> [ProviderRateLimit] {
-        let supported = providers.filter { $0 == .kimiCode || $0 == .zCode }
+        let supported = providers.filter(\.usesQuotaCLI)
         guard !supported.isEmpty else { return [] }
         let environment = quotaEnvironment(
             providers: supported,
@@ -111,7 +111,7 @@ enum QuotaCLIBridge {
         }
         return try envelope.products.map { product in
             guard let provider = ProviderRateLimit.Provider(rawValue: product.id),
-                  provider == .kimiCode || provider == .zCode
+                  provider.usesQuotaCLI
             else { throw ProtocolError.unknownProduct(product.id) }
 
             let status: ProviderRateLimit.Status
@@ -140,6 +140,18 @@ enum QuotaCLIBridge {
                 fetchedAt: product.fetchedAt,
                 dataAsOf: product.dataAsOf
             )
+        }
+    }
+}
+
+extension ProviderRateLimit.Provider {
+    /// Providers implemented by the shared, schema-versioned CLI boundary.
+    /// Cursor deliberately stays outside until it has an official stable
+    /// quota protocol; selecting it must never start a subprocess or request.
+    var usesQuotaCLI: Bool {
+        switch self {
+        case .kimiCode, .zCode, .grok: return true
+        case .codex, .claudeCode, .cursor: return false
         }
     }
 }

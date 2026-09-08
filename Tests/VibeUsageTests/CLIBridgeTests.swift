@@ -61,16 +61,18 @@ final class CLIBridgeTests: XCTestCase {
             throw XCTSkip("需要本地 CLI 路径")
         }
 
-        // Exercise the local CLI contract without depending on whether this
-        // machine happens to be logged into Kimi. ZCode with no caller-owned
-        // key is deterministic and must never consult another app's login.
+        // Exercise both a deterministic credential-gated product and Grok's
+        // local-only adapter. Grok may be `.ok` or `.noData` depending on the
+        // fixture machine, but it must always round-trip as its own product.
         let snapshots = try await QuotaCLIBridge.fetch(
-            providers: [.zCode],
+            providers: [.zCode, .grok],
             zCodeAPIKey: nil,
             zCodeRegion: .bigModel
         )
 
-        XCTAssertEqual(snapshots.map(\.provider), [.zCode])
-        XCTAssertEqual(snapshots.first?.status, .unauthorized)
+        XCTAssertEqual(snapshots.map(\.provider), [.zCode, .grok])
+        XCTAssertEqual(snapshots.first(where: { $0.provider == .zCode })?.status, .unauthorized)
+        let grokStatus = snapshots.first(where: { $0.provider == .grok })?.status
+        XCTAssertTrue(grokStatus == .ok || grokStatus == .noData || grokStatus == .retryableError)
     }
 }

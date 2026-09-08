@@ -93,15 +93,18 @@ struct RateLimitCardView: View {
     }
 
     /// Keep every selected provider visible once at least one selected product
-    /// has real/actionable content. When all selected providers settle on
-    /// `.noData`, use the compact notice instead of empty cards.
+    /// has real/actionable content. A selected Cursor is itself actionable
+    /// product-state content: the card explains that detection succeeded while
+    /// the official quota protocol is still pending. Other all-`.noData` rows
+    /// keep using the compact notice.
     static func visibleProviders(
         selected: [ProviderRateLimit.Provider],
         snapshots: [ProviderRateLimit],
         refreshing: Set<ProviderRateLimit.Provider>
     ) -> [ProviderRateLimit.Provider] {
         let hasContent = selected.contains { provider in
-            (snapshots.first(where: { $0.provider == provider })?.status ?? .noData) != .noData
+            if provider == .cursor { return true }
+            return (snapshots.first(where: { $0.provider == provider })?.status ?? .noData) != .noData
                 || refreshing.contains(provider)
         }
         return hasContent ? selected : []
@@ -235,12 +238,23 @@ private struct ProviderCard: View {
                 Text("正在读取订阅配额…")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.5))
+            } else if snapshot.provider == .cursor {
+                Text(cursorPendingText)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Color(white: 0.5))
             } else {
                 Text("未检测到可用订阅配额")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.5))
             }
         }
+    }
+
+    private var cursorPendingText: String {
+        let detected = appState.quotaProducts.first(where: { $0.provider == .cursor })?.isDetected == true
+        return detected
+            ? "已识别 Cursor · 等待官方配额接口"
+            : "未检测到 Cursor · 等待官方配额接口"
     }
 
     /// One slot in the rows VStack: either a live `QuotaRow` or a placeholder
@@ -662,7 +676,7 @@ private struct ProviderIcon: View {
         switch provider {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
-        case .kimiCode, .zCode, .cursorGrok: return nil
+        case .kimiCode, .zCode, .grok, .cursor: return nil
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
@@ -712,7 +726,8 @@ private extension ProviderRateLimit.Provider {
         case .claudeCode: return "sparkles"
         case .kimiCode: return "moon.stars"
         case .zCode: return "z.square"
-        case .cursorGrok: return "cursorarrow.rays"
+        case .grok: return "bolt.horizontal.circle"
+        case .cursor: return "cursorarrow.rays"
         }
     }
 }

@@ -48,7 +48,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case claudeCode = "claude-code"
         case kimiCode = "kimi-code"
         case zCode = "zcode"
-        case cursorGrok = "cursor-grok"
+        case grok = "grok"
+        case cursor = "cursor"
 
         var displayName: String {
             switch self {
@@ -56,7 +57,8 @@ struct ProviderRateLimit: Equatable, Identifiable {
             case .claudeCode: return "Claude"
             case .kimiCode: return "Kimi Code"
             case .zCode: return "ZCode"
-            case .cursorGrok: return "Grok（Cursor）"
+            case .grok: return "Grok"
+            case .cursor: return "Cursor"
             }
         }
     }
