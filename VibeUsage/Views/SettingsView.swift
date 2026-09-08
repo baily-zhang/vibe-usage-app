@@ -23,6 +23,9 @@ struct SettingsView: View {
     @State private var isSavingZCodeAPIKey = false
     @State private var zCodeAPIKeyMessage: String?
     @State private var zCodeAPIKeyError: String?
+    #if DEBUG
+    @State private var diagnosticExportMessage: String?
+    #endif
 
     private let extraRootSources = [
         (id: "codex", name: "Codex"),
@@ -325,6 +328,24 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
+            #if DEBUG
+            Section {
+                Button("导出诊断日志…") {
+                    exportDiagnosticLog()
+                }
+                if let diagnosticExportMessage {
+                    Text(diagnosticExportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("测试诊断")
+            } footer: {
+                Text("仅测试构建可用。日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
+                    .font(.caption)
+            }
+            #endif
+
             // About & Updates
             Section {
                 LabeledContent("版本") {
@@ -503,6 +524,25 @@ struct SettingsView: View {
             zCodeAPIKeyError = error.localizedDescription
         }
     }
+
+    #if DEBUG
+    private func exportDiagnosticLog() {
+        diagnosticExportMessage = nil
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "vibe-usage-diagnostics-\(Int(Date().timeIntervalSince1970)).jsonl"
+        panel.prompt = "导出"
+        panel.message = "请选择脱敏测试诊断日志的保存位置"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        do {
+            try TestDiagnosticLog.export(to: destination)
+            diagnosticExportMessage = "诊断日志已导出"
+        } catch {
+            diagnosticExportMessage = "导出失败：\(error.localizedDescription)"
+        }
+    }
+    #endif
 
     private func setAutoStart(_ enabled: Bool) {
         do {

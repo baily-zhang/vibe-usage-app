@@ -106,6 +106,9 @@ final class RateLimitCoordinator {
 
     private func performCodexRefresh() async {
         guard let appState, appState.codexRateLimitEnabled else { return }
+        #if DEBUG
+        TestDiagnosticLog.recordQuotaRefreshStarted([.codex])
+        #endif
 
         // Instant paint: if nothing usable is on screen yet, surface the last
         // *live* snapshot (single small file, negligible read) so the card
@@ -128,8 +131,14 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaCancelled([.codex])
+            #endif
             return
         } catch {
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaFailure([.codex], error: error)
+            #endif
             // Offline / endpoint drift → degrade to exactly the pre-network
             // behavior: whatever the session JSONL has. If the JSONL has
             // nothing but a previous live snapshot is still on screen, keep
@@ -162,6 +171,11 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
+        #if DEBUG
+        if let snapshot = currentSnapshot(.codex) {
+            TestDiagnosticLog.recordQuotaResult(snapshot)
+        }
+        #endif
         lastCodexFetchAt = Date()
     }
 
@@ -204,6 +218,9 @@ final class RateLimitCoordinator {
     private func performClaudeRefresh() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() entered")
+        #if DEBUG
+        TestDiagnosticLog.recordQuotaRefreshStarted([.claudeCode])
+        #endif
 
         // Instant paint from disk, for the same reason Codex does it: the live
         // reading costs a ~2.5s subprocess round trip, and an empty card for
@@ -221,8 +238,14 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaCancelled([.claudeCode])
+            #endif
             return
         } catch {
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaFailure([.claudeCode], error: error)
+            #endif
             let failure = Self.classify(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             if failure == .notApplicable {
@@ -244,6 +267,11 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
+        #if DEBUG
+        if let snapshot = currentSnapshot(.claudeCode) {
+            TestDiagnosticLog.recordQuotaResult(snapshot)
+        }
+        #endif
         lastClaudeFetchAt = Date()
     }
 
@@ -303,6 +331,9 @@ final class RateLimitCoordinator {
 
     private func performCLIRefresh(_ providers: [ProviderRateLimit.Provider]) async {
         guard let appState else { return }
+        #if DEBUG
+        TestDiagnosticLog.recordQuotaRefreshStarted(providers)
+        #endif
         do {
             let snapshots = try await fetchCLIQuotas(providers, appState.zCodeAPIKeyForQuotaFetch())
             guard !Task.isCancelled else { return }
@@ -314,19 +345,33 @@ final class RateLimitCoordinator {
                                 || currentSnapshot(provider)?.status != .ok {
                         upsert(snapshot)
                     }
-                } else if currentSnapshot(provider)?.status != .ok {
-                    upsert(ProviderRateLimit(
-                        provider: provider,
-                        status: .retryableError,
-                        fetchedAt: Date()
-                    ))
+                    #if DEBUG
+                    TestDiagnosticLog.recordQuotaResult(snapshot)
+                    #endif
+                } else {
+                    #if DEBUG
+                    TestDiagnosticLog.recordMissingQuotaResult(provider)
+                    #endif
+                    if currentSnapshot(provider)?.status != .ok {
+                        upsert(ProviderRateLimit(
+                            provider: provider,
+                            status: .retryableError,
+                            fetchedAt: Date()
+                        ))
+                    }
                 }
                 lastCLIFetchAt[provider] = Date()
             }
         } catch is CancellationError {
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaCancelled(providers)
+            #endif
             return
         } catch {
             debugLog("[rate-limit] quota CLI failed: \(error)")
+            #if DEBUG
+            TestDiagnosticLog.recordQuotaFailure(providers, error: error)
+            #endif
             guard !Task.isCancelled else { return }
             for provider in providers where appState.isQuotaProviderSelected(provider) {
                 if currentSnapshot(provider)?.status != .ok {
