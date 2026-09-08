@@ -153,7 +153,7 @@ stutters / sticks whenever the pointer is parked over the 趋势 chart, because
 SwiftUI keeps delivering hover updates as the content slides under the cursor.
 
 ### Sync Pipeline
-The bundled CLI package specifier is an exact, reviewed compatibility version rather than `@latest`; update it only after that CLI version is published and its config, sync, and quota contracts pass the Mac integration tests. `VIBE_USAGE_CLI_PACKAGE` remains the local integration-test override.
+The bundled CLI package specifier is an exact, reviewed compatibility version rather than `@latest`. A Mac build with an advanced specifier must not be released until that CLI version is published and its config, sync, and quota contracts pass the Mac integration tests; `VIBE_USAGE_CLI_PACKAGE` remains the pre-publish local integration-test override.
 
 1. `SyncScheduler` fires every 30 minutes (background upload + fetch)
 2. `SyncEngine` runs the `@vibe-cafe/vibe-usage` CLI via `CLIBridge`
