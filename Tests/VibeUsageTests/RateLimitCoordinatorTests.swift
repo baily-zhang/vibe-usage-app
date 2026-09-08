@@ -178,6 +178,32 @@ struct RateLimitCoordinatorTests {
         )
     }
 
+    @Test @MainActor
+    func unselectedProviderDoesNotStartItsFetcher() async {
+        let suite = "RateLimitCoordinatorTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let appState = AppState(quotaDefaults: defaults)
+        appState.codexRateLimitEnabled = false
+        var fetchCount = 0
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCodexLive: {
+                fetchCount += 1
+                return self.snapshot(utilization: 1, dataAsOf: Date())
+            },
+            loadCodexCache: { nil },
+            readCodexFallback: {
+                ProviderRateLimit(provider: .codex, status: .noData)
+            }
+        )
+
+        await coordinator.refreshCodex()
+
+        #expect(fetchCount == 0)
+        #expect(appState.rateLimits.allSatisfy { $0.provider != .codex })
+    }
+
     private func claudeSnapshot(
         utilization: Double,
         dataAsOf: Date?

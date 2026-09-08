@@ -267,16 +267,15 @@ struct PopoverView: View {
 
     @ViewBuilder
     private var rateLimitSection: some View {
-        if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
-            // zIndex must beat FilterTagsView's (10): the quota hover tooltip
-            // overflows below the card, and the filter row would otherwise
-            // paint over it.
-            RateLimitCardView()
-                .zIndex(20)
-            Divider()
-                .background(Color(white: 0.16))
-                .padding(.vertical, 2)
-        }
+        // Always keep the section visible: an intentionally empty selection
+        // must still expose the selector so the user can add a product again.
+        // zIndex must beat FilterTagsView's (10) because quota tooltips can
+        // overflow below the cards.
+        RateLimitCardView()
+            .zIndex(20)
+        Divider()
+            .background(Color(white: 0.16))
+            .padding(.vertical, 2)
     }
 
     // MARK: - Header

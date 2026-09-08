@@ -250,18 +250,28 @@ final class RateLimitCoordinator {
         _ = await (codex, claude)
     }
 
+    /// Popover-open refresh for the selected products only. Keeping the fan-out
+    /// here ensures an unselected provider never performs network or subprocess
+    /// work even as the product catalog grows.
+    func refreshSelectedIfNeeded() async {
+        async let codex: Void = refreshCodexIfNeeded()
+        async let claude: Void = refreshClaudeIfNeeded()
+        _ = await (codex, claude)
+    }
+
     /// Ensure every enabled provider has a placeholder entry so the card row
     /// renders its loading state on a cold open instead of appearing empty.
     func seedPlaceholders() {
-        for provider in [ProviderRateLimit.Provider.codex, .claudeCode] {
-            let enabled = provider == .codex
-                ? appState?.codexRateLimitEnabled == true
-                : appState?.claudeRateLimitEnabled == true
-            guard enabled,
-                  appState?.rateLimits.contains(where: { $0.provider == provider }) != true
-            else { continue }
-            upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
+        for provider in appState?.selectedQuotaProviders ?? [] {
+            seedPlaceholder(for: provider)
         }
+    }
+
+    func seedPlaceholder(for provider: ProviderRateLimit.Provider) {
+        guard appState?.isQuotaProviderSelected(provider) == true,
+              appState?.rateLimits.contains(where: { $0.provider == provider }) != true
+        else { return }
+        upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
     }
 
     // MARK: - Panel lifecycle
@@ -304,6 +314,17 @@ final class RateLimitCoordinator {
         claudeRefreshTask = nil
         claudeRefreshID = nil
         appState?.isClaudeRateLimitRefreshing = false
+    }
+
+    func cancelRefresh(for provider: ProviderRateLimit.Provider) {
+        switch provider {
+        case .codex:
+            cancelCodexRefresh()
+        case .claudeCode:
+            cancelClaudeRefresh()
+        case .kimiCode, .zCode, .cursorGrok:
+            break
+        }
     }
 
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {

@@ -1,43 +1,90 @@
 import SwiftUI
 import AppKit
 
-/// Side-by-side subscription quota cards for Codex (left) and Claude (right).
+/// Subscription quota section with local discovery, a two-slot selector, and
+/// provider-neutral cards. Selection order is card order.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
     var body: some View {
-        let codex = snapshot(for: .codex)
-        let claude = snapshot(for: .claudeCode)
         let visibleProviders = Self.visibleProviders(
-            codex: codex,
-            claude: claude,
-            codexEnabled: appState.codexRateLimitEnabled,
-            claudeEnabled: appState.claudeRateLimitEnabled,
-            codexRefreshing: appState.isCodexRateLimitRefreshing,
-            claudeRefreshing: appState.isClaudeRateLimitRefreshing
+            selected: appState.selectedQuotaProviders,
+            snapshots: appState.rateLimits,
+            refreshing: Set(appState.selectedQuotaProviders.filter(appState.isRateLimitRefreshing))
         )
-        let showCodex = visibleProviders.contains(.codex)
-        let showClaude = visibleProviders.contains(.claudeCode)
 
-        if showCodex && showClaude {
-            // Grid keeps both row cells the same height by default — needed
-            // for visual symmetry when one provider has more rows than the
-            // other (e.g. free Codex with only 7d, vs Claude Pro with 5h+7d).
-            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
-                GridRow {
-                    ProviderCard(snapshot: codex)
-                    ProviderCard(snapshot: claude)
+        VStack(alignment: .leading, spacing: 8) {
+            sectionHeader
+
+            if visibleProviders.count == 2 {
+                // Grid keeps both row cells the same height when one provider
+                // exposes fewer meters or an error message.
+                Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                    GridRow {
+                        ProviderCard(snapshot: snapshot(for: visibleProviders[0]))
+                        ProviderCard(snapshot: snapshot(for: visibleProviders[1]))
+                    }
                 }
+            } else if let provider = visibleProviders.first {
+                ProviderCard(snapshot: snapshot(for: provider))
+            } else {
+                noticeBar
             }
-        } else if showCodex {
-            ProviderCard(snapshot: codex)
-        } else if showClaude {
-            ProviderCard(snapshot: claude)
-        } else if appState.codexRateLimitEnabled || appState.claudeRateLimitEnabled {
-            noticeBar
-        } else {
-            EmptyView()
         }
+    }
+
+    private var sectionHeader: some View {
+        HStack(spacing: 8) {
+            Text("订阅配额")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(white: 0.72))
+            Spacer()
+            productSelector
+        }
+    }
+
+    private var productSelector: some View {
+        Menu {
+            ForEach(appState.quotaProducts) { product in
+                let selected = appState.isQuotaProviderSelected(product.provider)
+                Button {
+                    Task {
+                        await appState.setQuotaProductSelected(
+                            product.provider,
+                            selected: !selected
+                        )
+                    }
+                } label: {
+                    Label(
+                        "\(product.displayName) · \(product.statusText)",
+                        systemImage: selected ? "checkmark" : "circle"
+                    )
+                }
+                .disabled(!selected && !appState.canSelectQuotaProvider(product.provider))
+            }
+
+            Divider()
+            Button("重新检测本机产品") {
+                appState.rediscoverQuotaProducts()
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("选择 \(appState.selectedQuotaProviders.count)/\(QuotaSelectionPreferences.maximumSelectionCount)")
+                    .font(.system(size: 10.5, weight: .medium))
+            }
+            .foregroundStyle(Color(white: 0.72))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(Color(white: 0.11))
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color(white: 0.2), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 4))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("选择最多两个订阅产品")
     }
 
     private func snapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
@@ -45,38 +92,28 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Keep every enabled provider visible once at least one provider has a
-    /// real or actionable card. This makes the Settings toggles truthful: an
-    /// enabled Claude card cannot silently disappear beside working Codex data
-    /// just because Claude currently reports `.noData`. When both enabled
-    /// providers have no data and are idle, `body` still uses the compact
-    /// `noticeBar` instead of reserving two empty cards.
+    /// Keep every selected provider visible once at least one selected product
+    /// has real/actionable content. When all selected providers settle on
+    /// `.noData`, use the compact notice instead of empty cards.
     static func visibleProviders(
-        codex: ProviderRateLimit,
-        claude: ProviderRateLimit,
-        codexEnabled: Bool,
-        claudeEnabled: Bool,
-        codexRefreshing: Bool,
-        claudeRefreshing: Bool
-    ) -> Set<ProviderRateLimit.Provider> {
-        let codexHasContent = codexEnabled && (codex.status != .noData || codexRefreshing)
-        let claudeHasContent = claudeEnabled && (claude.status != .noData || claudeRefreshing)
-        guard codexHasContent || claudeHasContent else { return [] }
-
-        var visible: Set<ProviderRateLimit.Provider> = []
-        if codexEnabled { visible.insert(.codex) }
-        if claudeEnabled { visible.insert(.claudeCode) }
-        return visible
+        selected: [ProviderRateLimit.Provider],
+        snapshots: [ProviderRateLimit],
+        refreshing: Set<ProviderRateLimit.Provider>
+    ) -> [ProviderRateLimit.Provider] {
+        let hasContent = selected.contains { provider in
+            (snapshots.first(where: { $0.provider == provider })?.status ?? .noData) != .noData
+                || refreshing.contains(provider)
+        }
+        return hasContent ? selected : []
     }
 
-    /// Single-line whisper shown when neither Codex nor Claude has any data.
-    /// Mirrors the generic "feature exists; use a tool to populate" hint without
-    /// reserving the full card row's vertical space.
     private var noticeBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
                 .font(.system(size: 10))
-            Text("支持 Codex / Claude 订阅配额监控")
+            Text(appState.selectedQuotaProviders.isEmpty
+                 ? "自动识别本机产品；请选择最多两个进行显示"
+                 : "已选择的产品暂无可用订阅配额")
                 .font(.system(size: 11))
         }
         .foregroundStyle(Color(white: 0.4))
@@ -189,7 +226,7 @@ private struct ProviderCard: View {
             // truly revoked, opening the CLI surfaces the re-login prompt too.
             // Telling the user to "re-login" would be wrong advice in the
             // common expired-while-idle case.
-            messageContent(text: "请打开 \(snapshot.provider.rawValue) 使用一次后重试", action: "重试")
+            messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
         case .retryableError:
             messageContent(text: "暂时无法读取订阅配额", action: "重试")
         case .error(let m): messageContent(text: m, action: "重试")
@@ -226,12 +263,14 @@ private struct ProviderCard: View {
         }
     }
 
-    /// Visible rows in display order. Paid Codex plans always reserve the 5h
-    /// slot — if utilization is unknown (no recent activity, so `parseWindow`
-    /// dropped the expired window) we render a placeholder rather than letting
-    /// the 7d row shift up and pose as 5h. Free Codex / Claude never get the
-    /// 5h placeholder because those plans don't carry that window at all.
-    private var visibleRows: [RowItem] {
+    /// All available meters in provider-defined priority order. Native readers
+    /// still populate their typed fields, while future CLI adapters can supply
+    /// arbitrary meters through `snapshot.meters`.
+    private var allRows: [RowItem] {
+        if !snapshot.meters.isEmpty {
+            return snapshot.meters.map { .live(label: $0.label, window: $0.window) }
+        }
+
         var out: [RowItem] = []
         if let w = snapshot.fiveHour {
             out.append(.live(label: "5h", window: w))
@@ -245,8 +284,21 @@ private struct ProviderCard: View {
             ))
         }
         if let w = snapshot.sevenDay { out.append(.live(label: "7d", window: w)) }
+        if let w = snapshot.sevenDayOpus { out.append(.live(label: "Opus", window: w)) }
+        if let w = snapshot.sevenDaySonnet { out.append(.live(label: "Sonnet", window: w)) }
+        if let extra = snapshot.extraUsage, extra.isEnabled, extra.limit > 0 {
+            out.append(.live(
+                label: "额外",
+                window: RateLimitWindow(utilization: extra.spend / extra.limit * 100)
+            ))
+        }
         return out
     }
+
+    /// Cards remain compact even when a provider exposes model-specific or
+    /// pay-as-you-go meters. The footer states how many details are folded.
+    private var visibleRows: [RowItem] { Array(allRows.prefix(2)) }
+    private var additionalMeterCount: Int { max(0, allRows.count - visibleRows.count) }
 
     /// True only for paid Codex plans (Plus / Pro / Business), where Codex
     /// emits both `primary` and `secondary` windows in every `token_count`
@@ -332,10 +384,7 @@ private struct ProviderCard: View {
     // MARK: Freshness / footer
 
     private var isRefreshing: Bool {
-        switch snapshot.provider {
-        case .codex:      return appState.isCodexRateLimitRefreshing
-        case .claudeCode: return appState.isClaudeRateLimitRefreshing
-        }
+        appState.isRateLimitRefreshing(snapshot.provider)
     }
 
     /// Data older than this gets a 「数据截至」 note. Claude captures age
@@ -348,11 +397,15 @@ private struct ProviderCard: View {
     /// One quiet tertiary line under the quota rows for stale-data context.
     /// Reset credits live beside the provider title so they never add a row.
     private func footerNote(at now: Date) -> String? {
+        var notes: [String] = []
+        if additionalMeterCount > 0 {
+            notes.append("另有 \(additionalMeterCount) 项")
+        }
         if let asOf = snapshot.dataAsOf,
            now.timeIntervalSince(asOf) > Self.staleNoteThreshold {
-            return "数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))"
+            notes.append("数据截至 \(Formatters.formatRelativeTime(asOf, relativeTo: now))")
         }
-        return nil
+        return notes.isEmpty ? nil : notes.joined(separator: " · ")
     }
 
     // MARK: Error states
@@ -409,7 +462,8 @@ private struct QuotaRow: View {
             Text(label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color(white: 0.6))
-                .frame(width: 20, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: 42, alignment: .leading)
 
             if hasElapsed {
                 // Codex: token bar + elapsed-time bar.
@@ -464,7 +518,8 @@ private struct EmptyQuotaRow: View {
             Text(label)
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color(white: 0.4))
-                .frame(width: 20, alignment: .leading)
+                .lineLimit(1)
+                .frame(width: 42, alignment: .leading)
 
             Text(message)
                 .font(.system(size: 11))
@@ -593,7 +648,7 @@ private struct ProviderIcon: View {
                 .interpolation(.high)
                 .scaledToFit()
         } else {
-            Image(systemName: provider == .codex ? "terminal" : "sparkles")
+            Image(systemName: provider.fallbackSymbolName)
                 .font(.system(size: 12))
                 .foregroundStyle(Color(white: 0.6))
         }
@@ -607,6 +662,7 @@ private struct ProviderIcon: View {
         switch provider {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
+        case .kimiCode, .zCode, .cursorGrok: return nil
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
@@ -649,13 +705,14 @@ private extension RateLimitWindow {
     }
 }
 
-// MARK: - Provider helpers
-
 private extension ProviderRateLimit.Provider {
-    var displayName: String {
+    var fallbackSymbolName: String {
         switch self {
-        case .codex:      return "Codex"
-        case .claudeCode: return "Claude"
+        case .codex: return "terminal"
+        case .claudeCode: return "sparkles"
+        case .kimiCode: return "moon.stars"
+        case .zCode: return "z.square"
+        case .cursorGrok: return "cursorarrow.rays"
         }
     }
 }

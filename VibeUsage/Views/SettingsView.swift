@@ -199,35 +199,49 @@ struct SettingsView: View {
 
             // Subscription quota monitoring
             Section {
-                Toggle("显示 Codex 订阅配额", isOn: Binding(
-                    get: { appState.codexRateLimitEnabled },
-                    set: { newValue in
-                        Task { await appState.setCodexRateLimitEnabled(newValue) }
-                    }
-                ))
-                .tint(.green)
-
-                Toggle(isOn: Binding(
-                    get: { appState.claudeRateLimitEnabled },
-                    set: { newValue in
-                        Task { await appState.setClaudeRateLimitEnabled(newValue) }
-                    }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("显示 Claude 订阅配额")
-                        // Only worth explaining when the numbers come from the
-                        // Claude Code copy bundled inside Claude Desktop, which
-                        // the user never installed themselves.
-                        if appState.claudeUsesDesktopBundledCLI {
-                            Text("数据来源：Claude Desktop")
+                ForEach(appState.quotaProducts) { product in
+                    Toggle(isOn: Binding(
+                        get: { appState.isQuotaProviderSelected(product.provider) },
+                        set: { newValue in
+                            Task {
+                                await appState.setQuotaProductSelected(
+                                    product.provider,
+                                    selected: newValue
+                                )
+                            }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(product.displayName)
+                            Text(product.statusText)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if product.provider == .claudeCode,
+                               appState.claudeUsesDesktopBundledCLI {
+                                Text("数据来源：Claude Desktop")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .tint(.green)
+                    .disabled(
+                        !appState.isQuotaProviderSelected(product.provider)
+                            && !appState.canSelectQuotaProvider(product.provider)
+                    )
                 }
-                .tint(.green)
+
+                Button("重新检测本机产品") {
+                    appState.rediscoverQuotaProducts()
+                }
             } header: {
-                Text("订阅配额")
+                Text("订阅配额（\(appState.selectedQuotaProviders.count)/\(QuotaSelectionPreferences.maximumSelectionCount)）")
+            } footer: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("最多选择两个产品；未选择的产品不会联网读取配额。")
+                    Text("Grok（Cursor）、ZCode、Kimi Code 会先进行本地识别，协议验证完成后开放选择。")
+                }
+                .font(.caption)
             }
 
             // Menu bar display

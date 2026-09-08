@@ -157,10 +157,11 @@ final class AppState {
     var isConfigured: Bool = false
     var runtimeAvailable: Bool = true
 
-    // MARK: - Rate Limits (subscription quota for Claude + Codex)
-    var codexRateLimitEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(codexRateLimitEnabled, forKey: "codexRateLimitEnabled") }
+    // MARK: - Subscription Quotas
+    private(set) var quotaProducts: [QuotaProduct] = QuotaProductRegistry.catalog.map {
+        QuotaProduct(provider: $0.0, availability: $0.1, isDetected: false)
     }
+    private(set) var selectedQuotaProviders: [ProviderRateLimit.Provider] = [.codex, .claudeCode]
     var rateLimits: [ProviderRateLimit] = []
 
     /// True while the corresponding provider's refresh is in flight — the card
@@ -170,13 +171,16 @@ final class AppState {
     var isCodexRateLimitRefreshing: Bool = false
     var isClaudeRateLimitRefreshing: Bool = false
 
-    /// Whether to show the Claude quota card. Purely a display preference now,
-    /// exactly like `codexRateLimitEnabled`: reads go through `ClaudeUsageProbe`
-    /// and `ClaudeUsageCache`, neither of which modifies the user's Claude
-    /// configuration. It used to gate installing a statusline hook, which is
-    /// why it defaulted off and needed an explicit opt-in click.
-    var claudeRateLimitEnabled: Bool = true {
-        didSet { UserDefaults.standard.set(claudeRateLimitEnabled, forKey: "claudeRateLimitEnabled") }
+    /// Compatibility projections for the native provider adapters. The source
+    /// of truth is the ordered selector above; these keep the existing readers
+    /// focused while the other products move onto the shared CLI contract.
+    var codexRateLimitEnabled: Bool {
+        get { selectedQuotaProviders.contains(.codex) }
+        set { updateQuotaSelection(provider: .codex, selected: newValue) }
+    }
+    var claudeRateLimitEnabled: Bool {
+        get { selectedQuotaProviders.contains(.claudeCode) }
+        set { updateQuotaSelection(provider: .claudeCode, selected: newValue) }
     }
 
     // MARK: - Menu Bar Display Prefs
@@ -221,16 +225,19 @@ final class AppState {
     private var isRateLimitPanelVisible = false
     private var config: VibeUsageConfig?
     private let usageFetcher: (String, String, UsageQueryRange) async throws -> UsageResponse
+    private let quotaDefaults: UserDefaults
 
     init(
         initialConfig: VibeUsageConfig? = nil,
         usageFetcher: @escaping (String, String, UsageQueryRange) async throws -> UsageResponse = { apiUrl, apiKey, range in
             try await APIClient(baseURL: apiUrl, apiKey: apiKey).fetchUsage(range: range)
-        }
+        },
+        quotaDefaults: UserDefaults = .standard
     ) {
         self.config = initialConfig
         self.isConfigured = initialConfig?.apiKey != nil
         self.usageFetcher = usageFetcher
+        self.quotaDefaults = quotaDefaults
     }
 
     // MARK: - Lifecycle
@@ -240,9 +247,11 @@ final class AppState {
         self.showCostInMenuBar = UserDefaults.standard.object(forKey: "showCostInMenuBar") as? Bool ?? true
         self.showTokensInMenuBar = UserDefaults.standard.object(forKey: "showTokensInMenuBar") as? Bool ?? false
         self.showInDock = UserDefaults.standard.object(forKey: "showInDock") as? Bool ?? true
-        let legacyRateLimitEnabled = UserDefaults.standard.object(forKey: "rateLimitMonitoringEnabled") as? Bool
-        self.codexRateLimitEnabled = UserDefaults.standard.object(forKey: "codexRateLimitEnabled") as? Bool ?? legacyRateLimitEnabled ?? true
-        self.claudeRateLimitEnabled = Self.resolveClaudeRateLimitPreference()
+        self.quotaProducts = QuotaProductRegistry.discover()
+        self.selectedQuotaProviders = QuotaSelectionPreferences.resolve(
+            defaults: quotaDefaults,
+            products: quotaProducts
+        )
         self.claudeUsesDesktopBundledCLI = ClaudeUsageProbe.primarySourceKind() == .desktop
 
         // Hand back the `statusLine.command` edit the pre-probe releases made.
@@ -259,27 +268,12 @@ final class AppState {
             startScheduler()
         }
 
-        // Rate limits are independent of configuration — both Codex and Claude
-        // read local files (no auth). Start only for enabled providers.
-        if codexRateLimitEnabled || claudeRateLimitEnabled {
+        // Subscription quotas are independent of Vibe Usage account linking.
+        // Start only when a product is selected; discovery itself is local and
+        // never starts a network request.
+        if !selectedQuotaProviders.isEmpty {
             startRateLimitCoordinator()
         }
-    }
-
-    /// A stored `false` used to mean two different things: "I don't want this
-    /// card" and, far more often, "I never clicked the 启用 button that would
-    /// have edited my Claude settings". Now that showing the card costs the
-    /// user nothing, that ambiguity is resolved once in favour of on — matching
-    /// the Codex default — and the answer is respected from then on.
-    private static func resolveClaudeRateLimitPreference() -> Bool {
-        let defaults = UserDefaults.standard
-        let migrationKey = "claudeRateLimitProbeMigrationDone"
-        guard defaults.bool(forKey: migrationKey) else {
-            defaults.set(true, forKey: migrationKey)
-            defaults.set(true, forKey: "claudeRateLimitEnabled")
-            return true
-        }
-        return defaults.object(forKey: "claudeRateLimitEnabled") as? Bool ?? true
     }
 
     /// Save config to disk and start scheduler.
@@ -371,34 +365,67 @@ final class AppState {
         await fetchUsageData()
     }
 
-    /// Toggle Codex quota monitoring. Codex is read-only, so disabling just
-    /// stops scans and hides its snapshot.
+    /// Legacy provider-specific entry point retained for Settings bindings and
+    /// tests. New UI should use `setQuotaProductSelected`.
     func setCodexRateLimitEnabled(_ enabled: Bool) async {
-        guard codexRateLimitEnabled != enabled else { return }
-        codexRateLimitEnabled = enabled
-
-        if enabled {
-            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
-            await refreshCodexRateLimit()
-        } else {
-            rateLimitCoordinator?.cancelCodexRefresh()
-            removeRateLimit(for: .codex)
-        }
+        await setQuotaProductSelected(.codex, selected: enabled)
     }
 
     /// Toggle Claude quota monitoring. Read-only like Codex — nothing to
     /// install, so the preference flips immediately.
     func setClaudeRateLimitEnabled(_ enabled: Bool) async {
-        guard claudeRateLimitEnabled != enabled else { return }
-        claudeRateLimitEnabled = enabled
+        await setQuotaProductSelected(.claudeCode, selected: enabled)
+    }
 
-        if enabled {
-            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
-            await rateLimitCoordinator?.refreshClaude()
-        } else {
-            rateLimitCoordinator?.claudeMonitoringDidChange()
-            removeRateLimit(for: .claudeCode)
+    /// Update one slot in the main-panel selector. Selection order is display
+    /// order, capped at two, and persisted independently from shared CLI config.
+    /// Products without a verified adapter stay visible in the menu but cannot
+    /// be selected yet.
+    func setQuotaProductSelected(
+        _ provider: ProviderRateLimit.Provider,
+        selected: Bool
+    ) async {
+        let wasSelected = isQuotaProviderSelected(provider)
+        guard wasSelected != selected else { return }
+        if selected {
+            guard canSelectQuotaProvider(provider) else { return }
         }
+
+        updateQuotaSelection(provider: provider, selected: selected)
+        if selected {
+            if rateLimitCoordinator == nil { startRateLimitCoordinator() }
+            rateLimitCoordinator?.seedPlaceholder(for: provider)
+            await refreshRateLimit(for: provider)
+        } else {
+            rateLimitCoordinator?.cancelRefresh(for: provider)
+            removeRateLimit(for: provider)
+        }
+    }
+
+    func isQuotaProviderSelected(_ provider: ProviderRateLimit.Provider) -> Bool {
+        selectedQuotaProviders.contains(provider)
+    }
+
+    func isRateLimitRefreshing(_ provider: ProviderRateLimit.Provider) -> Bool {
+        switch provider {
+        case .codex: return isCodexRateLimitRefreshing
+        case .claudeCode: return isClaudeRateLimitRefreshing
+        case .kimiCode, .zCode, .cursorGrok: return false
+        }
+    }
+
+    func canSelectQuotaProvider(_ provider: ProviderRateLimit.Provider) -> Bool {
+        if isQuotaProviderSelected(provider) { return true }
+        guard selectedQuotaProviders.count < QuotaSelectionPreferences.maximumSelectionCount else {
+            return false
+        }
+        return quotaProducts.first(where: { $0.provider == provider })?.isSelectable == true
+    }
+
+    /// Re-run only the local filesystem checks. Newly found products are never
+    /// inserted into the user's two slots automatically after initialization.
+    func rediscoverQuotaProducts() {
+        quotaProducts = QuotaProductRegistry.discover()
     }
 
     /// Refresh Codex rate limits unconditionally. Safe — no keychain prompts.
@@ -419,6 +446,10 @@ final class AppState {
         case .claudeCode:
             guard claudeRateLimitEnabled else { return }
             await rateLimitCoordinator?.refreshClaude()
+        case .kimiCode, .zCode, .cursorGrok:
+            // Listed so discovery and selection UI remain forward-compatible;
+            // network access begins only after each CLI protocol adapter lands.
+            return
         }
     }
 
@@ -445,6 +476,13 @@ final class AppState {
         await rateLimitCoordinator?.refreshAll()
     }
 
+    /// Popover-open path for all selected products. Today the coordinator owns
+    /// native Codex/Claude adapters; its generic boundary prevents views from
+    /// learning that implementation detail.
+    func refreshSelectedRateLimitsIfNeeded() async {
+        await rateLimitCoordinator?.refreshSelectedIfNeeded()
+    }
+
     /// The menu-bar panel opened or closed. Closing cancels in-flight refreshes
     /// for both providers — nothing off-screen is worth a round trip.
     func rateLimitPanelVisibilityChanged(visible: Bool) {
@@ -466,6 +504,21 @@ final class AppState {
 
     private func removeRateLimit(for provider: ProviderRateLimit.Provider) {
         rateLimits.removeAll { $0.provider == provider }
+    }
+
+    private func updateQuotaSelection(
+        provider: ProviderRateLimit.Provider,
+        selected: Bool
+    ) {
+        var next = selectedQuotaProviders.filter { $0 != provider }
+        if selected, next.count < QuotaSelectionPreferences.maximumSelectionCount {
+            next.append(provider)
+        }
+        next = QuotaSelectionPreferences.normalized(next)
+        guard next != selectedQuotaProviders else { return }
+        selectedQuotaProviders = next
+        QuotaSelectionPreferences.persist(next, defaults: quotaDefaults)
+        quotaDefaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
     }
 
     private func startRateLimitCoordinator() {
