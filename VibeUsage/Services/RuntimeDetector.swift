@@ -2,7 +2,10 @@ import Foundation
 
 /// Detects available Node.js runtime (bun preferred, npx fallback)
 enum RuntimeDetector {
-    static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@latest"
+    // Pin the cross-repository contract consumed by this app. A newer CLI can
+    // change independently; advancing this version is an explicit app change
+    // that is tested before release. Local development can still override it.
+    static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@0.10.23"
     static var packageSpecifier: String {
         ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"]
             ?? defaultPackageSpecifier

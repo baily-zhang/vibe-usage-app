@@ -2,15 +2,15 @@ import XCTest
 @testable import VibeUsage
 
 final class RuntimeDetectorTests: XCTestCase {
-    func testBunUsesExplicitLatestPackage() {
-        XCTAssertEqual(RuntimeDetector.defaultPackageSpecifier, "@vibe-cafe/vibe-usage@latest")
+    func testBunUsesPinnedCompatiblePackage() {
+        XCTAssertEqual(RuntimeDetector.defaultPackageSpecifier, "@vibe-cafe/vibe-usage@0.10.23")
         XCTAssertEqual(
             RuntimeDetector.arguments(runtimeName: "bun", command: ["sync"]),
             ["x", RuntimeDetector.packageSpecifier, "sync"]
         )
     }
 
-    func testNpxUsesExplicitLatestPackageForConfigCommands() {
+    func testNpxUsesPinnedPackageForConfigCommands() {
         XCTAssertEqual(
             RuntimeDetector.arguments(runtimeName: "npx", command: ["config", "get", "apiKey"]),
             ["--yes", RuntimeDetector.packageSpecifier, "config", "get", "apiKey"]

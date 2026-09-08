@@ -220,9 +220,11 @@ private struct ProviderCard: View {
         case .unauthorized:
             if snapshot.provider == .zCode {
                 messageContent(text: "请在设置中更新 Z.ai API Key", action: "重试")
+            } else if snapshot.provider == .kimiCode {
+                // The shared CLI has already attempted Kimi's standard OAuth
+                // refresh before this status reaches the app.
+                messageContent(text: "请重新登录 Kimi Code 后重试", action: "重试")
             } else {
-                // Read-only OAuth consumers never refresh another product's
-                // credential. Kimi/Codex owns the next refresh or login.
                 messageContent(text: "请打开 \(snapshot.provider.displayName) 使用一次后重试", action: "重试")
             }
         case .retryableError:
