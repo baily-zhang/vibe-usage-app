@@ -44,7 +44,7 @@ git clone https://github.com/vibe-cafe/vibe-usage-app.git
 cd vibe-usage-app
 ./scripts/build-app.sh              # host architecture
 ./scripts/build-app.sh --universal  # arm64 + x86_64 (Intel + Apple Silicon)
-./scripts/build-app.sh --external-test --universal --notarize  # signed external test build with redacted diagnostics
+./scripts/build-app.sh --external-test --cli-source ../vibe-usage --universal --notarize  # signed external test build
 open "dist/Vibe Usage.app"
 ```
 

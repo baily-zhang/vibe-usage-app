@@ -367,7 +367,11 @@ struct SettingsView: View {
             // About & Updates
             Section {
                 LabeledContent("版本") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
+                    Text(
+                        AppConfig.isExternalTest
+                            ? "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version) · 外测"
+                            : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -584,7 +588,7 @@ struct SettingsView: View {
         let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
         let device: DeviceCodeResponse
         do {
-            device = try await requestDeviceCode(baseURL: baseURL, clientName: "Vibe Usage.app", hostname: hostname)
+            device = try await requestDeviceCode(baseURL: baseURL, clientName: "\(AppConfig.displayName).app", hostname: hostname)
         } catch {
             relinkError = "无法连接服务端：\(error.localizedDescription)"
             return

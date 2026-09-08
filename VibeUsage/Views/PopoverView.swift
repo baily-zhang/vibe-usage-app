@@ -32,7 +32,7 @@ struct PopoverView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Title
             HStack(spacing: 6) {
-                Text("Vibe Usage")
+                Text(AppConfig.displayName)
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.white)
                 if AppConfig.isDev {
@@ -136,7 +136,7 @@ struct PopoverView: View {
         let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
         let device: DeviceCodeResponse
         do {
-            device = try await requestDeviceCode(baseURL: baseURL, clientName: "Vibe Usage.app", hostname: hostname)
+            device = try await requestDeviceCode(baseURL: baseURL, clientName: "\(AppConfig.displayName).app", hostname: hostname)
         } catch {
             setupError = "无法连接服务端：\(error.localizedDescription)"
             return
@@ -283,7 +283,7 @@ struct PopoverView: View {
     private var headerBar: some View {
         HStack(spacing: 6) {
             HStack(spacing: 6) {
-                Text("Vibe Usage")
+                Text(AppConfig.displayName)
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(.white)
                 if AppConfig.isDev {

@@ -27,7 +27,7 @@ enum TestDiagnosticLog {
     static var defaultDirectoryURL: URL {
         FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Logs", isDirectory: true)
-            .appendingPathComponent("Vibe Usage", isDirectory: true)
+            .appendingPathComponent(AppConfig.displayName, isDirectory: true)
     }
 
     static func recordQuotaRefreshStarted(

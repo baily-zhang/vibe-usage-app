@@ -18,18 +18,25 @@ xcrun notarytool history --keychain-profile VibeUsage
 ## External test build
 
 An external test build uses the production API and the normal per-user config,
-but includes the local, redacted quota diagnostic exporter. Build it only with
-the explicit flag:
+but includes the local, redacted quota diagnostic exporter and embeds an exact
+CLI checkout. Both repositories must be clean so the package can record the app
+commit plus the CLI commit and package version. Build it only with the explicit
+flags:
 
 ```bash
-./scripts/build-app.sh --external-test --universal --notarize
+./scripts/build-app.sh \
+  --external-test \
+  --cli-source ../vibe-usage \
+  --universal \
+  --notarize
 ```
 
 Do not generate or publish an Appcast for an external test build. Ordinary
-Release builds omit the diagnostic implementation and UI at compile time. The
-app's exact CLI package specifier must point to an already-published test or
-stable CLI version before distributing the package; never point testers at an
-unpublished local path or `@latest`.
+Release builds omit the diagnostic implementation, UI, separate Keychain
+namespace, and bundled CLI at compile time. When release credentials are not
+available, omit `--notarize` to create an ad-hoc signed
+`dist/VibeUsage-Test.zip`; testers must use macOS Control-click → Open. The
+signed/notarized path remains the preferred wider-distribution artifact.
 
 ## Moving releases to another Mac
 

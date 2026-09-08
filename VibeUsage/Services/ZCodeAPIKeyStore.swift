@@ -61,7 +61,12 @@ struct KeychainZCodeAPIKeyStore: ZCodeAPIKeyStoring {
     private let service: String
 
     init(environment: [String: String] = ProcessInfo.processInfo.environment) {
-        #if DEBUG
+        #if VIBE_USAGE_EXTERNAL_TEST
+        // External packages are ad-hoc signed during early testing. Keep their
+        // explicitly entered key separate from both the production app and
+        // local Debug builds so signature changes never query an existing item.
+        self.service = "ai.vibecafe.vibe-usage.external-test"
+        #elseif DEBUG
         // A locally re-signed test app must not query the release app's saved
         // item: macOS would correctly ask the user to approve the unfamiliar
         // signature. UI tests can opt into an empty, isolated namespace; the

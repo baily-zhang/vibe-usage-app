@@ -6,8 +6,16 @@ enum RuntimeDetector {
     // change independently; advancing this version is an explicit app change
     // that is tested before release. Local development can still override it.
     static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@0.10.23"
+    private static var bundledPackageSpecifier: String? {
+        #if VIBE_USAGE_EXTERNAL_TEST
+        Bundle.main.url(forResource: "vibe-usage-cli", withExtension: "tgz")?.path
+        #else
+        nil
+        #endif
+    }
     static var packageSpecifier: String {
         ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"]
+            ?? bundledPackageSpecifier
             ?? defaultPackageSpecifier
     }
 
@@ -121,6 +129,12 @@ enum RuntimeDetector {
 
     /// Detect the best available JS runtime
     static func detect() -> Runtime? {
+        // External-test bundles carry an exact local CLI tarball. bun x does
+        // not accept package-file paths, so this variant intentionally uses
+        // npx and reports no runtime if Node/npm is missing.
+        if bundledPackageSpecifier != nil {
+            return findExecutable("npx").map { Runtime(executablePath: $0, name: "npx") }
+        }
         // Local package paths are an integration-test hook; bun x does not
         // accept them, while npx does.
         if ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] != nil,
