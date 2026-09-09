@@ -30,21 +30,10 @@ struct PopoverView: View {
 
     private var unconfiguredView: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // Title
-            HStack(spacing: 6) {
-                Text(AppConfig.displayName)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                if AppConfig.isDev {
-                    Text("DEBUG")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.orange)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Color.orange.opacity(0.15))
-                        .cornerRadius(3)
-                }
-            }
+            // Quota monitoring is local and does not require a Vibe account.
+            // Keep the normal header (including Settings) available so an
+            // unlinked user can also configure ZCode or export diagnostics.
+            headerBar
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
                 .padding(.bottom, 8)
@@ -52,73 +41,86 @@ struct PopoverView: View {
             Divider()
                 .background(Color(white: 0.16))
 
-            VStack(alignment: .leading, spacing: 16) {
-                if let pendingUserCode {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: "info.circle")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color(white: 0.5))
-                        Text("请确认浏览器中显示的验证码与下方一致")
-                            .font(.system(size: 12))
-                            .foregroundStyle(Color(white: 0.7))
+            VStack(alignment: .leading, spacing: 14) {
+                rateLimitSection
+
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("用量同步（可选）")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundStyle(Color(white: 0.72))
+                        Text("登录 Vibe Usage 后可同步 Token 与查看统计；不影响上方订阅配额。")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color(white: 0.42))
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(white: 0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
-                    .cornerRadius(4)
 
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("验证码")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundStyle(Color(white: 0.5))
-                            .textCase(.uppercase)
-                        Text(pendingUserCode)
-                            .font(.system(size: 22, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                            .tracking(3)
-                    }
-                }
-
-                if let setupError {
-                    Text(setupError)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.red)
-                }
-
-                Button {
-                    let task = Task { await runDeviceFlow() }
-                    deviceFlowTask = task
-                } label: {
-                    HStack(spacing: 6) {
-                        if deviceFlowState == .awaitingApproval {
-                            ProgressView()
-                                .controlSize(.small)
-                                .tint(.black)
+                    if let pendingUserCode {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "info.circle")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color(white: 0.5))
+                            Text("请确认浏览器中显示的验证码与下方一致")
+                                .font(.system(size: 12))
+                                .foregroundStyle(Color(white: 0.7))
                         }
-                        Text(deviceFlowState == .awaitingApproval ? "等待浏览器确认…" : "登录并链接数据")
-                            .font(.system(size: 13, weight: .medium))
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(.white)
-                .foregroundStyle(.black)
-                .disabled(deviceFlowState == .awaitingApproval)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color(white: 0.06))
+                        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Color(white: 0.16), lineWidth: 1))
+                        .cornerRadius(4)
 
-                if deviceFlowState == .awaitingApproval {
-                    Button {
-                        cancelDeviceFlow()
-                    } label: {
-                        Text("取消，重新开始")
-                            .font(.system(size: 12, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text("验证码")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color(white: 0.5))
+                                .textCase(.uppercase)
+                            Text(pendingUserCode)
+                                .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(.white)
+                                .tracking(3)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Color(white: 0.6))
+
+                    if let setupError {
+                        Text(setupError)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.red)
+                    }
+
+                    Button {
+                        let task = Task { await runDeviceFlow() }
+                        deviceFlowTask = task
+                    } label: {
+                        HStack(spacing: 6) {
+                            if deviceFlowState == .awaitingApproval {
+                                ProgressView()
+                                    .controlSize(.small)
+                                    .tint(.black)
+                            }
+                            Text(deviceFlowState == .awaitingApproval ? "等待浏览器确认…" : "登录并链接数据")
+                                .font(.system(size: 13, weight: .medium))
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.white)
+                    .foregroundStyle(.black)
+                    .disabled(deviceFlowState == .awaitingApproval)
+
+                    if deviceFlowState == .awaitingApproval {
+                        Button {
+                            cancelDeviceFlow()
+                        } label: {
+                            Text("取消，重新开始")
+                                .font(.system(size: 12, weight: .medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(Color(white: 0.6))
+                    }
                 }
             }
             .padding(16)
