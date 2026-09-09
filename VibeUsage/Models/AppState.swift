@@ -302,6 +302,11 @@ final class AppState {
     /// so this policy can be tested without touching real user configuration.
     func initializeQuotaProducts() {
         self.quotaProducts = quotaProductDiscoverer()
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaProductsDiscovered(
+            quotaProducts.filter(\.isDetected).map(\.provider)
+        )
+        #endif
         let persistedRegion = quotaDefaults.string(forKey: ZCodeQuotaRegion.defaultsKey)
             .flatMap(ZCodeQuotaRegion.init(rawValue:))
         // Existing releases stored only a Z.ai key. Preserve that region on
@@ -325,6 +330,9 @@ final class AppState {
             defaults: quotaDefaults,
             products: initiallySelectableProducts
         )
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaSelectionInitialized(selectedQuotaProviders)
+        #endif
     }
 
     /// Save config to disk and start scheduler.
@@ -528,6 +536,11 @@ final class AppState {
     /// inserted into the user's two slots automatically after initialization.
     func rediscoverQuotaProducts() {
         quotaProducts = QuotaProductRegistry.discover()
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaProductsDiscovered(
+            quotaProducts.filter(\.isDetected).map(\.provider)
+        )
+        #endif
     }
 
     /// Refresh Codex rate limits unconditionally. Safe — no keychain prompts.
@@ -621,6 +634,9 @@ final class AppState {
         selectedQuotaProviders = next
         QuotaSelectionPreferences.persist(next, defaults: quotaDefaults)
         quotaDefaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaSelectionChanged(next)
+        #endif
     }
 
     private func startRateLimitCoordinator() {

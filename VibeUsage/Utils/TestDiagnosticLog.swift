@@ -16,6 +16,11 @@ enum TestDiagnosticLog {
         var meterCount: Int?
         var errorCode: String?
         var appVersion: String
+        var appBuild: String
+        var buildKind: String
+        var appCommit: String
+        var cliVersion: String
+        var cliCommit: String
         var osVersion: String
     }
 
@@ -37,6 +42,48 @@ enum TestDiagnosticLog {
     ) {
         record(
             event: "quota_refresh_started",
+            providers: providers,
+            directoryURL: directoryURL,
+            now: now
+        )
+    }
+
+    /// Records only provider ids whose ordinary installation signals were
+    /// found. No paths, credentials, account state, or subscription details
+    /// are accepted by this typed boundary.
+    static func recordQuotaProductsDiscovered(
+        _ providers: [ProviderRateLimit.Provider],
+        directoryURL: URL? = nil,
+        now: Date = Date()
+    ) {
+        record(
+            event: "quota_products_discovered",
+            providers: providers,
+            directoryURL: directoryURL,
+            now: now
+        )
+    }
+
+    static func recordQuotaSelectionInitialized(
+        _ providers: [ProviderRateLimit.Provider],
+        directoryURL: URL? = nil,
+        now: Date = Date()
+    ) {
+        record(
+            event: "quota_selection_initialized",
+            providers: providers,
+            directoryURL: directoryURL,
+            now: now
+        )
+    }
+
+    static func recordQuotaSelectionChanged(
+        _ providers: [ProviderRateLimit.Provider],
+        directoryURL: URL? = nil,
+        now: Date = Date()
+    ) {
+        record(
+            event: "quota_selection_changed",
             providers: providers,
             directoryURL: directoryURL,
             now: now
@@ -133,6 +180,7 @@ enum TestDiagnosticLog {
         // Unit tests must opt into an explicit temporary directory. Otherwise
         // their synthetic failures would pollute a developer's real test log.
         guard directoryURL != nil || !isRunningUnitTests else { return }
+        let build = buildMetadata
         let entry = Entry(
             timestamp: iso8601(now),
             event: event,
@@ -140,7 +188,12 @@ enum TestDiagnosticLog {
             status: status,
             meterCount: meterCount,
             errorCode: errorCode,
-            appVersion: AppConfig.version,
+            appVersion: build.appVersion,
+            appBuild: build.appBuild,
+            buildKind: build.buildKind,
+            appCommit: build.appCommit,
+            cliVersion: build.cliVersion,
+            cliCommit: build.cliCommit,
             osVersion: ProcessInfo.processInfo.operatingSystemVersionString
         )
         let directory = directoryURL ?? defaultDirectoryURL
@@ -256,6 +309,44 @@ enum TestDiagnosticLog {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private struct BuildMetadata {
+        var appVersion: String
+        var appBuild: String
+        var buildKind: String
+        var appCommit: String
+        var cliVersion: String
+        var cliCommit: String
+    }
+
+    /// External-test packaging stamps these values into Info.plist after the
+    /// build. Fixed fallbacks keep local Debug logs machine-readable without
+    /// ever serializing package paths or environment overrides.
+    private static var buildMetadata: BuildMetadata {
+        #if VIBE_USAGE_EXTERNAL_TEST
+        let fallbackBuildKind = "external-test"
+        #else
+        let fallbackBuildKind = "debug"
+        #endif
+        return BuildMetadata(
+            appVersion: bundleString("CFBundleShortVersionString", fallback: AppConfig.version),
+            appBuild: bundleString("CFBundleVersion"),
+            buildKind: bundleString("VibeUsageBuildKind", fallback: fallbackBuildKind),
+            appCommit: bundleString("VibeUsageAppCommit"),
+            cliVersion: bundleString("VibeUsageCLIVersion"),
+            cliCommit: bundleString("VibeUsageCLICommit")
+        )
+    }
+
+    private static func bundleString(_ key: String, fallback: String = "unknown") -> String {
+        guard let value = Bundle.main.object(forInfoDictionaryKey: key) else { return fallback }
+        if let string = value as? String {
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? fallback : trimmed
+        }
+        if let number = value as? NSNumber { return number.stringValue }
+        return fallback
     }
 
     private static var isRunningUnitTests: Bool {
