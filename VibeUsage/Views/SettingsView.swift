@@ -300,7 +300,8 @@ struct SettingsView: View {
                 Text("订阅配额（\(appState.selectedQuotaProviders.count)/\(QuotaSelectionPreferences.maximumSelectionCount)）")
             } footer: {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("最多选择两个产品；未选择的产品不会联网读取配额。")
+                    Text("最多显示两个产品；选择新产品会自动替换最早选择的产品。")
+                    Text("检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。")
                     Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
                     Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key。")
                 }

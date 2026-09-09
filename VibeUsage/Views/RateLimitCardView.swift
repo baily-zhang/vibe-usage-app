@@ -84,7 +84,11 @@ struct RateLimitCardView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help("选择最多两个订阅产品")
+        .help(
+            appState.selectedQuotaProviders.count == QuotaSelectionPreferences.maximumSelectionCount
+                ? "选择新产品会替换最早选择的产品"
+                : "选择最多两个订阅产品"
+        )
     }
 
     private func snapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
@@ -222,7 +226,10 @@ private struct ProviderCard: View {
             messageContent(text: "订阅配额未启用", action: "重试")
         case .unauthorized:
             if snapshot.provider == .zCode {
-                messageContent(text: "请在设置中更新 Z.ai API Key", action: "重试")
+                messageContent(
+                    text: "请在设置中配置 \(appState.zCodeQuotaRegion.apiKeyName)",
+                    action: "重试"
+                )
             } else if snapshot.provider == .kimiCode {
                 // The shared CLI has already attempted Kimi's standard OAuth
                 // refresh before this status reaches the app.

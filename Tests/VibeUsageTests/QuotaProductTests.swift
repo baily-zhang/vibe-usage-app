@@ -91,6 +91,28 @@ struct QuotaProductTests {
     }
 
     @Test
+    func selectingThirdProductKeepsTwoMostRecentChoices() {
+        let selection = QuotaSelectionPreferences.updating(
+            [.codex, .claudeCode],
+            provider: .kimiCode,
+            selected: true
+        )
+
+        #expect(selection == [.claudeCode, .kimiCode])
+    }
+
+    @Test
+    func deselectingAProductDoesNotRepopulateItsSlot() {
+        let selection = QuotaSelectionPreferences.updating(
+            [.claudeCode, .grok],
+            provider: .claudeCode,
+            selected: false
+        )
+
+        #expect(selection == [.grok])
+    }
+
+    @Test
     func formerCursorGrokSelectionMigratesToCursorWithoutEnablingGrok() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -173,7 +195,28 @@ struct QuotaProductTests {
     }
 
     @Test @MainActor
-    func zCodeRequiresAnExplicitAppOwnedKeyBeforeSelection() throws {
+    func manualSelectionRemainsAvailableWhenTwoSlotsAreFull() {
+        let (defaults, suite) = defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
+        defaults.set(["codex", "claude-code"], forKey: QuotaSelectionPreferences.selectedIDsKey)
+        let appState = AppState(
+            quotaDefaults: defaults,
+            zCodeAPIKeyStore: MemoryZCodeKeyStore(),
+            quotaProductDiscoverer: { self.products(detected: []) }
+        )
+
+        appState.initializeQuotaProducts()
+
+        #expect(appState.selectedQuotaProviders == [.codex, .claudeCode])
+        #expect(appState.canSelectQuotaProvider(.kimiCode))
+        #expect(appState.canSelectQuotaProvider(.grok))
+        #expect(appState.canSelectQuotaProvider(.zCode))
+        #expect(appState.canSelectQuotaProvider(.cursor))
+    }
+
+    @Test @MainActor
+    func zCodeStatusReflectsExplicitAppOwnedKey() throws {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         let keyStore = MemoryZCodeKeyStore()

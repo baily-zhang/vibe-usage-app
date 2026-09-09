@@ -430,9 +430,8 @@ final class AppState {
 
     /// Update one slot in the main-panel selector. Selection order is display
     /// order, capped at two, and persisted independently from shared CLI config.
-    /// Products without a verified adapter normally cannot be selected. Cursor
-    /// is the deliberate exception: when detected it may reserve a slot so the
-    /// card can communicate that the official quota protocol is still pending.
+    /// Manual selection is never gated by imperfect local discovery. When both
+    /// slots are occupied, the oldest selection is replaced by the new choice.
     func setQuotaProductSelected(
         _ provider: ProviderRateLimit.Provider,
         selected: Bool
@@ -443,14 +442,18 @@ final class AppState {
             guard canSelectQuotaProvider(provider) else { return }
         }
 
+        let previousSelection = selectedQuotaProviders
         updateQuotaSelection(provider: provider, selected: selected)
+        let removedProviders = previousSelection.filter { !selectedQuotaProviders.contains($0) }
+        for removedProvider in removedProviders {
+            rateLimitCoordinator?.cancelRefresh(for: removedProvider)
+            removeRateLimit(for: removedProvider)
+        }
+
         if selected {
             if rateLimitCoordinator == nil { startRateLimitCoordinator() }
             rateLimitCoordinator?.seedPlaceholder(for: provider)
             await refreshRateLimit(for: provider)
-        } else {
-            rateLimitCoordinator?.cancelRefresh(for: provider)
-            removeRateLimit(for: provider)
         }
     }
 
@@ -469,17 +472,10 @@ final class AppState {
 
     func canSelectQuotaProvider(_ provider: ProviderRateLimit.Provider) -> Bool {
         if isQuotaProviderSelected(provider) { return true }
-        guard selectedQuotaProviders.count < QuotaSelectionPreferences.maximumSelectionCount else {
-            return false
-        }
-        if provider == .zCode, !zCodeAPIKeyConfigured { return false }
-        // Cursor is intentionally selectable once locally detected so users
-        // can reserve a card slot and see the integration state. It remains a
-        // pending product and therefore never joins first-launch auto-selection.
-        if provider == .cursor {
-            return quotaProducts.first(where: { $0.provider == provider })?.isDetected == true
-        }
-        return quotaProducts.first(where: { $0.provider == provider })?.isSelectable == true
+        // Discovery decides the first-launch defaults and the status copy, not
+        // whether an explicit user click is accepted. This also gives users a
+        // manual escape hatch when a tool lives in a non-standard directory.
+        return quotaProducts.contains(where: { $0.provider == provider })
     }
 
     func quotaProductStatusText(_ product: QuotaProduct) -> String {
@@ -616,11 +612,11 @@ final class AppState {
         provider: ProviderRateLimit.Provider,
         selected: Bool
     ) {
-        var next = selectedQuotaProviders.filter { $0 != provider }
-        if selected, next.count < QuotaSelectionPreferences.maximumSelectionCount {
-            next.append(provider)
-        }
-        next = QuotaSelectionPreferences.normalized(next)
+        let next = QuotaSelectionPreferences.updating(
+            selectedQuotaProviders,
+            provider: provider,
+            selected: selected
+        )
         guard next != selectedQuotaProviders else { return }
         selectedQuotaProviders = next
         QuotaSelectionPreferences.persist(next, defaults: quotaDefaults)

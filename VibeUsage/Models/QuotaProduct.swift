@@ -211,6 +211,26 @@ enum QuotaSelectionPreferences {
         defaults.set(normalizedSelection.contains(.claudeCode), forKey: "claudeRateLimitEnabled")
     }
 
+    /// Apply one explicit user choice to the two display slots. Detection is
+    /// only a first-launch recommendation: the manual selector must remain
+    /// usable when discovery is incomplete. Selecting a third product keeps
+    /// the two most recent choices instead of presenting a row of disabled
+    /// controls with no obvious recovery path.
+    static func updating(
+        _ selection: [ProviderRateLimit.Provider],
+        provider: ProviderRateLimit.Provider,
+        selected: Bool
+    ) -> [ProviderRateLimit.Provider] {
+        var next = normalized(selection).filter { $0 != provider }
+        if selected {
+            while next.count >= maximumSelectionCount {
+                next.removeFirst()
+            }
+            next.append(provider)
+        }
+        return normalized(next)
+    }
+
     static func normalized(
         _ selection: [ProviderRateLimit.Provider]
     ) -> [ProviderRateLimit.Provider] {
