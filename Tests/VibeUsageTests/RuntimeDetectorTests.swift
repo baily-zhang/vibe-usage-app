@@ -23,7 +23,6 @@ final class RuntimeDetectorTests: XCTestCase {
     }
 
     func testBunUsesPinnedCompatiblePackage() {
-        XCTAssertEqual(RuntimeDetector.defaultPackageSpecifier, "@vibe-cafe/vibe-usage@0.10.23")
         XCTAssertEqual(
             RuntimeDetector.arguments(runtimeName: "bun", command: ["sync"]),
             ["x", RuntimeDetector.packageSpecifier, "sync"]

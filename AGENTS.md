@@ -155,6 +155,8 @@ SwiftUI keeps delivering hover updates as the content slides under the cursor.
 ### Sync Pipeline
 The bundled CLI package specifier is an exact, reviewed compatibility version rather than `@latest`. A Mac build with an advanced specifier must not be released until that CLI version is published and its config, sync, and quota contracts pass the Mac integration tests; `VIBE_USAGE_CLI_PACKAGE` remains the pre-publish local integration-test override.
 
+`scripts/check-cli.mjs` validates the actual pinned npm package before normal `build-app.sh` packaging. It requires schema v1 discovery/fetch for Kimi, ZCode, and Grok, with Cursor discovery-only, using isolated credential-free directories. `--from-local` validates a packed checkout for pre-publish integration or the explicit external-test build; it must never bypass the published-package check for an ordinary app. See `docs/RELEASING.md` for CLI-before-app ordering.
+
 1. `SyncScheduler` fires every 30 minutes (background upload + fetch)
 2. `SyncEngine` runs the `@vibe-cafe/vibe-usage` CLI via `CLIBridge`
 3. `RuntimeDetector` finds Node.js or Bun on the system

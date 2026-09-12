@@ -15,6 +15,39 @@ security find-identity -v -p codesigning
 xcrun notarytool history --keychain-profile VibeUsage
 ```
 
+## CLI dependency and release ordering
+
+The Mac app pins `@vibe-cafe/vibe-usage@0.10.32`, the quota-protocol release
+integrated with upstream 0.10.31. This is a release dependency, not a claim that
+0.10.32 has already been published. The unrelated npm 0.10.23 package has no
+`quota` command and cannot be used with this app's new quota adapters.
+
+Before publishing the CLI, validate the actual local npm package:
+
+```bash
+node scripts/check-cli.mjs --from-local ../vibe-usage
+node --test scripts/check-cli.test.mjs
+```
+
+Merge and publish that CLI version first. Then run:
+
+```bash
+node scripts/check-cli.mjs
+```
+
+The default check downloads the exact pinned npm tarball and validates its
+version, JSON config output, discovery, and all three quota adapters using
+temporary directories without credentials. It ignores `VIBE_USAGE_CLI_PACKAGE`.
+`build-app.sh` runs this check before creating a normal app bundle, so an
+unpublished, missing, or incompatible CLI prevents packaging. `swift build`
+alone only compiles the app and does not validate its runtime npm dependency.
+If the planned version is taken before publication, update both CLI manifests
+and `RuntimeDetector.defaultPackageSpecifier` to the reviewed version together.
+
+Pre-publish Swift integration uses `VIBE_USAGE_CLI_PACKAGE` with the local
+checkout and a temporary `VIBE_USAGE_CONFIG_DIR`; see `CLIBridgeTests`.
+This verifies local compatibility and does not satisfy the production npm gate.
+
 ## External test build
 
 An external test build uses the production API and the normal per-user config,

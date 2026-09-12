@@ -169,6 +169,15 @@ if [[ ${#ARCHS[@]} -gt 0 ]]; then
     ARCHS=("${DEDUPED[@]}")
 fi
 
+# Check before compilation, signing, or replacing existing artifacts. A local
+# CLI override must never stand in for the published dependency of a normal app.
+echo "==> Checking CLI package contract..."
+if $EXTERNAL_TEST; then
+    node "$SCRIPT_DIR/check-cli.mjs" --from-local "$CLI_SOURCE"
+else
+    node "$SCRIPT_DIR/check-cli.mjs"
+fi
+
 # Fall back to ad-hoc signing when Developer ID is unavailable (e.g. local dev install).
 # Notarization obviously cannot work in that mode, and hardened runtime's library
 # validation rejects ad-hoc dylib loads across bundles, so the ad-hoc path also

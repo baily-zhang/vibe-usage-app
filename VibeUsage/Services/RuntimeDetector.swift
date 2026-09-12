@@ -5,7 +5,9 @@ enum RuntimeDetector {
     // Pin the cross-repository contract consumed by this app. A newer CLI can
     // change independently; advancing this version is an explicit app change
     // that is tested before release. Local development can still override it.
-    static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@0.10.23"
+    // 0.10.32 is the quota release integrated with upstream 0.10.31. The
+    // production packager verifies the published package's protocol first.
+    static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@0.10.32"
     private static var bundledPackageSpecifier: String? {
         #if VIBE_USAGE_EXTERNAL_TEST
         Bundle.main.url(forResource: "vibe-usage-cli", withExtension: "tgz")?.path
