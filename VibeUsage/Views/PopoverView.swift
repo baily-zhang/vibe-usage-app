@@ -18,6 +18,10 @@ struct PopoverView: View {
         VStack(spacing: 0) {
             if !appState.isConfigured {
                 unconfiguredView
+                    // The login code temporarily increases the panel's height.
+                    // Keep this content at its ideal height so the quota cards
+                    // cannot absorb that space after the flow is cancelled.
+                    .fixedSize(horizontal: false, vertical: true)
             } else {
                 dashboardView
             }
