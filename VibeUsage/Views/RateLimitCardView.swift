@@ -484,7 +484,9 @@ private struct QuotaRow: View {
                 .font(.system(size: 12, weight: .medium, design: .monospaced))
                 .foregroundStyle(Color(white: 0.6))
                 .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .frame(width: 42, alignment: .leading)
+                .help(label)
 
             if hasElapsed {
                 // Codex: token bar + elapsed-time bar.
