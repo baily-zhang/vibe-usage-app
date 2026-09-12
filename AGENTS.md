@@ -28,7 +28,8 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── APIClient.swift        # HTTP client for /api/usage (Bearer auth with vbu_ key) + unauthenticated device-flow helpers (requestDeviceCode/pollDeviceCode)
 │   │   ├── SyncEngine.swift       # Orchestrates CLI sync (runs @vibe-cafe/vibe-usage via Node/Bun)
 │   │   ├── SyncScheduler.swift    # 30-minute interval auto-sync timer
-│   │   ├── CLIBridge.swift        # Executes vibe-usage CLI as subprocess
+│   │   ├── CLIBridge.swift        # Executes vibe-usage CLI config commands
+│   │   ├── CLIProcessRunner.swift # Background process wait, temporary output files, explicit deadlines
 │   │   ├── RuntimeDetector.swift  # Finds Node.js or Bun runtime on the system
 │   │   ├── UpdaterViewModel.swift # Sparkle SPUUpdater bridge + SPUUpdaterDelegate proxy (publishes availableUpdate)
 │   │   ├── RateLimitCoordinator.swift # Orchestrates quota refreshes (cache-then-live for both providers)
@@ -159,6 +160,8 @@ SwiftUI keeps delivering hover updates as the content slides under the cursor.
 4. After sync completes, `fetchUsageData()` refreshes the dashboard
 5. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce) — fetch only, no upload
 6. Settings can persist one legacy `codexExtraHome` plus per-source isolated runtime roots (Codex / Grok / Antigravity, e.g. Multica homes) through the CLI (`config roots` / `add-root` / `remove-root`, CLI ≥ 0.10.20); sync then scans them together with each tool's default directory (`$CODEX_HOME` / `~/.codex` for Codex). The app never writes these fields itself — `CLIBridge` shells out so the CLI stays the single writer. Config writes must preserve unknown CLI fields, especially local privacy controls and `deviceId`. `VIBE_USAGE_CONFIG_DIR` / `VIBE_USAGE_CLI_PACKAGE` are integration-test hooks (the latter forces `npx` with a local package path).
+
+CLI subprocesses use `CLIProcessRunner`: blocking waits run on a dispatch worker, stdout/stderr go to private temporary files (removed after completion), and deadlines are reported as timeout rather than launcher stderr. Never wait for a subprocess to exit before draining `Pipe` output: a full pipe deadlocks the child, and an inherited pipe can outlive it. A one-second SIGTERM grace period is followed by SIGKILL for an unresponsive process. Exit zero remains success even when Bun prints dependency-resolution progress to stderr.
 
 ### Rate-Limit Refresh
 No background timer. `RateLimitCoordinator` is driven entirely by user-visible events:

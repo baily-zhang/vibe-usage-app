@@ -55,69 +55,26 @@ enum CLIBridge {
 
     @discardableResult
     private static func runCLI(args: [String], timeout: TimeInterval = 30) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            // `Process.waitUntilExit()` is blocking. Keep it off the MainActor
-            // so Settings remains responsive while npx/bun resolves the CLI.
-            DispatchQueue.global(qos: .userInitiated).async {
-                guard let runtime = RuntimeDetector.detect() else {
-                    continuation.resume(throwing: CLIError.noRuntime)
-                    return
-                }
-
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: runtime.executablePath)
-                process.arguments = RuntimeDetector.arguments(runtimeName: runtime.name, command: args)
-
-                // Inherit environment with runtime dir in PATH
-                var env = ProcessInfo.processInfo.environment
-                let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
-                if let existingPath = env["PATH"] {
-                    env["PATH"] = "\(runtimeDir):\(existingPath)"
-                } else {
-                    env["PATH"] = runtimeDir
-                }
-                env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
-
-                // In dev mode, tell CLI to use config.dev.json
-                #if DEBUG
-                env["VIBE_USAGE_DEV"] = "1"
-                #endif
-                process.environment = env
-
-                let stdoutPipe = Pipe()
-                let stderrPipe = Pipe()
-                process.standardOutput = stdoutPipe
-                process.standardError = stderrPipe
-
-                let timeoutItem = DispatchWorkItem {
-                    if process.isRunning {
-                        process.terminate()
-                    }
-                }
-                DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutItem)
-
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                    timeoutItem.cancel()
-
-                    let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                    let stdout = String(data: stdoutData, encoding: .utf8) ?? ""
-                    let stderr = String(data: stderrData, encoding: .utf8)?
-                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: stdout)
-                    } else {
-                        let msg = stderr.isEmpty ? "Exit code \(process.terminationStatus)" : stderr
-                        continuation.resume(throwing: CLIError.processFailure(msg))
-                    }
-                } catch {
-                    timeoutItem.cancel()
-                    continuation.resume(throwing: CLIError.processFailure(error.localizedDescription))
-                }
-            }
+        guard let runtime = RuntimeDetector.detect() else { throw CLIError.noRuntime }
+        var env = ProcessInfo.processInfo.environment
+        let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
+        env["PATH"] = runtimeDir + (env["PATH"].map { ":\($0)" } ?? "")
+        env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
+        #if DEBUG
+        env["VIBE_USAGE_DEV"] = "1"
+        #endif
+        let output = try await CLIProcessRunner.run(
+            executable: runtime.executablePath,
+            arguments: RuntimeDetector.arguments(runtimeName: runtime.name, command: args),
+            environment: env, timeout: timeout
+        )
+        if output.timedOut { throw CLIError.timeout }
+        guard output.exitCode == 0 else {
+            let message = [output.stdout, output.stderr]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }.joined(separator: "\n")
+            throw CLIError.processFailure(message.isEmpty ? "Exit code \(output.exitCode)" : message)
         }
+        return output.stdout
     }
 }
