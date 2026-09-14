@@ -266,6 +266,7 @@ struct SettingsView: View {
                                     : appState.zCodeQuotaRegion.apiKeyName,
                                 text: $zCodeAPIKey
                             )
+                            .textFieldStyle(.roundedBorder)
                             Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
                                 Task { await saveZCodeAPIKey() }
                             }
