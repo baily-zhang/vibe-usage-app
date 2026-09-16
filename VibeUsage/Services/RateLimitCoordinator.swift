@@ -335,17 +335,30 @@ final class RateLimitCoordinator {
 
     private func performCLIRefresh(_ providers: [ProviderRateLimit.Provider]) async {
         guard let appState else { return }
+        // Keep the exact regional credential context that started this request.
+        // A Key/region change invalidates only ZCode; unrelated products from a
+        // shared CLI response remain usable.
+        let requestsZCode = providers.contains(.zCode)
+        let requestedZCodeKey = requestsZCode
+            ? appState.zCodeAPIKeyForQuotaFetch()
+            : nil
+        let requestedZCodeRegion = appState.zCodeQuotaRegion
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
         TestDiagnosticLog.recordQuotaRefreshStarted(providers)
         #endif
         do {
             let snapshots = try await fetchCLIQuotas(
                 providers,
-                appState.zCodeAPIKeyForQuotaFetch(),
-                appState.zCodeQuotaRegion
+                requestedZCodeKey,
+                requestedZCodeRegion
             )
             guard !Task.isCancelled else { return }
-            for provider in providers where appState.isQuotaProviderSelected(provider) {
+            let zCodeContextIsCurrent = !requestsZCode || (
+                requestedZCodeKey == appState.zCodeAPIKeyForQuotaFetch()
+                    && requestedZCodeRegion == appState.zCodeQuotaRegion
+            )
+            for provider in providers where appState.isQuotaProviderSelected(provider)
+                && (provider != .zCode || zCodeContextIsCurrent) {
                 if let snapshot = snapshots.first(where: { $0.provider == provider }) {
                     if snapshot.status == .ok {
                         _ = upsertIfNewer(snapshot)
@@ -381,7 +394,12 @@ final class RateLimitCoordinator {
             TestDiagnosticLog.recordQuotaFailure(providers, error: error)
             #endif
             guard !Task.isCancelled else { return }
-            for provider in providers where appState.isQuotaProviderSelected(provider) {
+            let zCodeContextIsCurrent = !requestsZCode || (
+                requestedZCodeKey == appState.zCodeAPIKeyForQuotaFetch()
+                    && requestedZCodeRegion == appState.zCodeQuotaRegion
+            )
+            for provider in providers where appState.isQuotaProviderSelected(provider)
+                && (provider != .zCode || zCodeContextIsCurrent) {
                 if currentSnapshot(provider)?.status != .ok {
                     upsert(ProviderRateLimit(
                         provider: provider,
@@ -495,6 +513,16 @@ final class RateLimitCoordinator {
         case .kimiCode, .zCode, .grok:
             cancelCLIRefresh()
         case .cursor: break
+        }
+    }
+
+    /// ZCode's Key and region are part of its cache/request identity. Drop its
+    /// debounce timestamp and cancel a shared CLI request only when that
+    /// request actually includes ZCode.
+    func zCodeCredentialContextDidChange() {
+        lastCLIFetchAt[.zCode] = nil
+        if activeCLIProviders.contains(.zCode) {
+            cancelCLIRefresh()
         }
     }
 

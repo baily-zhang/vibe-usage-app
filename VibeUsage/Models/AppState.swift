@@ -503,11 +503,13 @@ final class AppState {
     func storeZCodeAPIKey(_ value: String?) throws {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         try zCodeAPIKeyStore.store(trimmed.isEmpty ? nil : trimmed, for: zCodeQuotaRegion)
+        // A saved value identifies the account behind every ZCode snapshot.
+        // Never retain or publish work from the previous Key after replacement.
+        rateLimitCoordinator?.zCodeCredentialContextDidChange()
+        removeRateLimit(for: .zCode)
         zCodeAPIKeyConfigured = !trimmed.isEmpty
         if trimmed.isEmpty, isQuotaProviderSelected(.zCode) {
             updateQuotaSelection(provider: .zCode, selected: false)
-            rateLimitCoordinator?.cancelRefresh(for: .zCode)
-            removeRateLimit(for: .zCode)
         }
     }
 
@@ -517,7 +519,7 @@ final class AppState {
     func setZCodeQuotaRegion(_ region: ZCodeQuotaRegion) async {
         guard region != zCodeQuotaRegion else { return }
         let wasSelected = isQuotaProviderSelected(.zCode)
-        rateLimitCoordinator?.cancelRefresh(for: .zCode)
+        rateLimitCoordinator?.zCodeCredentialContextDidChange()
         removeRateLimit(for: .zCode)
 
         zCodeQuotaRegion = region

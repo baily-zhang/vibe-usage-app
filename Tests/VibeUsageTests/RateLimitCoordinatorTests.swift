@@ -5,8 +5,12 @@ import Testing
 struct RateLimitCoordinatorTests {
     private final class MemoryZCodeKeyStore: ZCodeAPIKeyStoring {
         var values: [ZCodeQuotaRegion: String] = [:]
+        var loadCount = 0
         init(value: String? = nil) { values[.bigModel] = value }
-        func load(for region: ZCodeQuotaRegion) throws -> String? { values[region] }
+        func load(for region: ZCodeQuotaRegion) throws -> String? {
+            loadCount += 1
+            return values[region]
+        }
         func store(_ value: String?, for region: ZCodeQuotaRegion) throws {
             values[region] = value
         }
@@ -15,7 +19,8 @@ struct RateLimitCoordinatorTests {
     @MainActor
     private func selectedAppState(
         _ providers: [ProviderRateLimit.Provider],
-        zCodeAPIKey: String? = nil
+        zCodeAPIKey: String? = nil,
+        zCodeAPIKeyStore: MemoryZCodeKeyStore? = nil
     ) -> (AppState, UserDefaults, String) {
         let suite = "RateLimitCoordinatorTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -23,7 +28,7 @@ struct RateLimitCoordinatorTests {
         defaults.set(providers.map(\.rawValue), forKey: QuotaSelectionPreferences.selectedIDsKey)
         let appState = AppState(
             quotaDefaults: defaults,
-            zCodeAPIKeyStore: MemoryZCodeKeyStore(value: zCodeAPIKey),
+            zCodeAPIKeyStore: zCodeAPIKeyStore ?? MemoryZCodeKeyStore(value: zCodeAPIKey),
             quotaProductDiscoverer: {
                 QuotaProductRegistry.catalog.map { provider, availability in
                     QuotaProduct(
@@ -36,6 +41,29 @@ struct RateLimitCoordinatorTests {
         )
         appState.initializeQuotaProducts()
         return (appState, defaults, suite)
+    }
+
+    @Test @MainActor
+    func nonZCodeCLIRefreshDoesNotReadZCodeKey() async {
+        let keyStore = MemoryZCodeKeyStore(value: "unused-key")
+        let (appState, defaults, suite) = selectedAppState(
+            [.kimiCode],
+            zCodeAPIKeyStore: keyStore
+        )
+        defer { defaults.removePersistentDomain(forName: suite) }
+        keyStore.loadCount = 0
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { providers, key, _ in
+                #expect(providers == [.kimiCode])
+                #expect(key == nil)
+                return []
+            }
+        )
+
+        await coordinator.refreshCLIProviders([.kimiCode])
+
+        #expect(keyStore.loadCount == 0)
     }
 
     private func snapshot(
@@ -332,6 +360,88 @@ struct RateLimitCoordinatorTests {
                 == .retryableError
         )
         #expect(appState.cliQuotaRefreshingProviders.isEmpty)
+    }
+
+    @Test @MainActor
+    func replacingZCodeKeyClearsOldSuccessBeforeNewKeyFailure() async throws {
+        let (appState, defaults, suite) = selectedAppState(
+            [.zCode],
+            zCodeAPIKey: "old-key"
+        )
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let old = ProviderRateLimit(
+            provider: .zCode,
+            meters: [RateLimitMeter(
+                id: "five-hour",
+                label: "5h",
+                window: RateLimitWindow(utilization: 25)
+            )],
+            status: .ok,
+            fetchedAt: Date(),
+            dataAsOf: Date()
+        )
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { _, key, _ in
+                if key == "old-key" { return [old] }
+                #expect(key == "new-key")
+                return [ProviderRateLimit(
+                    provider: .zCode,
+                    status: .retryableError,
+                    fetchedAt: Date()
+                )]
+            }
+        )
+
+        await coordinator.refreshCLIProviders([.zCode])
+        #expect(appState.rateLimits.first(where: { $0.provider == .zCode }) == old)
+
+        try appState.storeZCodeAPIKey("new-key")
+        #expect(appState.rateLimits.allSatisfy { $0.provider != .zCode })
+
+        await coordinator.refreshCLIProviders([.zCode])
+        #expect(
+            appState.rateLimits.first(where: { $0.provider == .zCode })?.status
+                == .retryableError
+        )
+    }
+
+    @Test @MainActor
+    func lateZCodeResponseFromReplacedKeyCannotPublish() async throws {
+        let (appState, defaults, suite) = selectedAppState(
+            [.zCode],
+            zCodeAPIKey: "old-key"
+        )
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var requestStarted = false
+        let coordinator = RateLimitCoordinator(
+            appState: appState,
+            fetchCLIQuotas: { _, key, _ in
+                #expect(key == "old-key")
+                requestStarted = true
+                try await Task.sleep(for: .milliseconds(50))
+                return [ProviderRateLimit(
+                    provider: .zCode,
+                    meters: [RateLimitMeter(
+                        id: "five-hour",
+                        label: "5h",
+                        window: RateLimitWindow(utilization: 99)
+                    )],
+                    status: .ok,
+                    fetchedAt: Date(),
+                    dataAsOf: Date()
+                )]
+            }
+        )
+
+        let refresh = Task { @MainActor in
+            await coordinator.refreshCLIProviders([.zCode])
+        }
+        while !requestStarted { await Task.yield() }
+        try appState.storeZCodeAPIKey("new-key")
+        await refresh.value
+
+        #expect(appState.rateLimits.allSatisfy { $0.provider != .zCode })
     }
 
     @Test @MainActor
