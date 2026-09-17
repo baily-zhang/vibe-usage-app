@@ -2,8 +2,8 @@ import Foundation
 
 /// Provider-neutral meaning of a failed live refresh. Concrete transports
 /// conform to `RateLimitFetchError` so the coordinator can decide whether a
-/// card should stay quiet, collapse, request login, or offer retry without
-/// knowing each provider's private error enum.
+/// card stays neutral, requests login, or offers retry without knowing each
+/// provider's private error enum.
 enum RateLimitFetchFailure: Equatable {
     case absent
     case notApplicable
@@ -102,4 +102,22 @@ struct ProviderRateLimit: Equatable, Identifiable {
 
     /// Codex only: available rate-limit reset credits (nil when unknown or 0).
     var resetCreditsCount: Int?
+
+    /// Why a source that *did* answer had no window to draw, when it can say.
+    ///
+    /// Codex's live usage endpoint reports enforced windows exhaustively and
+    /// its `rate_limit` object carries `allowed` / `limit_reached`, so an
+    /// answer without any window is a fact — "used up for this period" or
+    /// "nothing enforced right now" — not a read failure. Every other source
+    /// (session JSONL, on-disk cache, the other providers) cannot tell the two
+    /// apart from "that product has no data here", so it leaves this nil and
+    /// the card stays neutral rather than guessing.
+    enum EmptyReason: Equatable {
+        /// `limit_reached == true`: this period's quota is consumed.
+        case limitReached
+        /// The endpoint answered without enforcing any window.
+        case noWindow
+    }
+
+    var emptyReason: EmptyReason?
 }

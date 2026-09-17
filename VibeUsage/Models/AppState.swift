@@ -298,7 +298,7 @@ final class AppState {
     }
 
     /// Initializes only local quota discovery, app-owned key state, and the
-    /// persisted two-slot selection. Kept separate from account/sync startup
+    /// persisted product selection. Kept separate from account/sync startup
     /// so this policy can be tested without touching real user configuration.
     func initializeQuotaProducts() {
         self.quotaProducts = quotaProductDiscoverer()
@@ -318,8 +318,9 @@ final class AppState {
             try? zCodeAPIKeyStore.load(for: zCodeQuotaRegion)
         ) != nil
         // On a fresh install, a detected ZCode client without an explicitly
-        // configured API key must not consume one of the two default slots.
-        // Stored/migrated selections still round-trip exactly.
+        // configured API key is not one of the auto-selected defaults — it
+        // would only ever show a "configure me" card. Stored/migrated
+        // selections still round-trip exactly.
         let initiallySelectableProducts = quotaProducts.map { product in
             guard product.provider == .zCode, !zCodeAPIKeyConfigured else { return product }
             var unavailable = product
@@ -436,10 +437,10 @@ final class AppState {
         await setQuotaProductSelected(.claudeCode, selected: enabled)
     }
 
-    /// Update one slot in the main-panel selector. Selection order is display
-    /// order, capped at two, and persisted independently from shared CLI config.
-    /// Manual selection is never gated by imperfect local discovery. When both
-    /// slots are occupied, the oldest selection is replaced by the new choice.
+    /// Update the main-panel product list. Selection order is display order and
+    /// is persisted independently from shared CLI config. Manual selection is
+    /// never gated by imperfect local discovery, and nothing is ever evicted:
+    /// the card row scrolls, so every enabled product keeps its card.
     func setQuotaProductSelected(
         _ provider: ProviderRateLimit.Provider,
         selected: Bool
@@ -535,7 +536,7 @@ final class AppState {
     }
 
     /// Re-run only the local filesystem checks. Newly found products are never
-    /// inserted into the user's two slots automatically after initialization.
+    /// added to the user's selection automatically after initialization.
     func rediscoverQuotaProducts() {
         quotaProducts = QuotaProductRegistry.discover()
         #if DEBUG || VIBE_USAGE_EXTERNAL_TEST

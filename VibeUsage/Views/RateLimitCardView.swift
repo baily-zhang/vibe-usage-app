@@ -1,34 +1,60 @@
 import SwiftUI
 import AppKit
 
-/// Subscription quota section with local discovery, a two-slot selector, and
+/// Subscription quota section with local discovery, a product selector, and
 /// provider-neutral cards. Selection order is card order.
 struct RateLimitCardView: View {
     @Environment(AppState.self) private var appState
 
-    var body: some View {
-        let visibleProviders = Self.visibleProviders(
-            selected: appState.selectedQuotaProviders,
-            snapshots: appState.rateLimits,
-            refreshing: Set(appState.selectedQuotaProviders.filter(appState.isRateLimitRefreshing))
-        )
+    /// Fixed card width. Two cards plus the 8pt gap fill the popover's content
+    /// box exactly ((520 − 2×16 padding − 8) / 2), so the familiar two-card row
+    /// is unchanged; a third product scrolls instead of squeezing every card
+    /// narrower than its meters and labels can render.
+    static let cardWidth: CGFloat = 240
 
+    var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             sectionHeader
 
-            if visibleProviders.count == 2 {
-                // Grid keeps both row cells the same height when one provider
-                // exposes fewer meters or an error message.
-                Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
-                    GridRow {
-                        ProviderCard(snapshot: snapshot(for: visibleProviders[0]))
-                        ProviderCard(snapshot: snapshot(for: visibleProviders[1]))
+            switch Self.sectionContent(selected: appState.selectedQuotaProviders) {
+            case let .cards(providers): cards(providers)
+            case .notice: noticeBar
+            }
+        }
+    }
+
+    /// What the section shows under the header. Cards are one-per-product
+    /// inside a horizontal scroller — an enabled product is never dropped, and
+    /// the section never folds into a single generic line just because every
+    /// card happens to be empty. The notice survives only for "you enabled
+    /// nothing", where it doubles as the hint for the selector beside it.
+    enum SectionContent: Equatable {
+        case cards([ProviderRateLimit.Provider])
+        case notice
+    }
+
+    static func sectionContent(
+        selected: [ProviderRateLimit.Provider]
+    ) -> SectionContent {
+        selected.isEmpty ? .notice : .cards(selected)
+    }
+
+    /// One card per selected product, in selection order, inside a horizontal
+    /// scroller. A product the user enabled must always show its own state,
+    /// because a collapsed section reads as "this feature is off" precisely
+    /// when the user wants to know why nothing is shown.
+    private func cards(_ providers: [ProviderRateLimit.Provider]) -> some View {
+        ScrollView(.horizontal, showsIndicators: providers.count > 2) {
+            // Grid, not HStack: one row's cards share the tallest card's
+            // height, so a provider showing fewer meters or an error message
+            // still aligns with its neighbours instead of ending short.
+            Grid(alignment: .topLeading, horizontalSpacing: 8, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(providers, id: \.self) { provider in
+                        ProviderCard(snapshot: snapshot(for: provider))
+                            .frame(width: Self.cardWidth, alignment: .topLeading)
                     }
                 }
-            } else if let provider = visibleProviders.first {
-                ProviderCard(snapshot: snapshot(for: provider))
-            } else {
-                noticeBar
             }
         }
     }
@@ -69,7 +95,7 @@ struct RateLimitCardView: View {
             }
         } label: {
             HStack(spacing: 4) {
-                Text("选择 \(appState.selectedQuotaProviders.count)/\(QuotaSelectionPreferences.maximumSelectionCount)")
+                Text("选择 \(appState.selectedQuotaProviders.count)")
                     .font(.system(size: 10.5, weight: .medium))
             }
             .foregroundStyle(Color(white: 0.72))
@@ -84,11 +110,7 @@ struct RateLimitCardView: View {
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
-        .help(
-            appState.selectedQuotaProviders.count == QuotaSelectionPreferences.maximumSelectionCount
-                ? "选择新产品会替换最早选择的产品"
-                : "选择最多两个订阅产品"
-        )
+        .help("选择要显示订阅配额的产品")
     }
 
     private func snapshot(for provider: ProviderRateLimit.Provider) -> ProviderRateLimit {
@@ -96,35 +118,35 @@ struct RateLimitCardView: View {
             ?? ProviderRateLimit(provider: provider, status: .noData)
     }
 
-    /// Keep every selected provider visible once at least one selected product
-    /// has real/actionable content. A selected Cursor is itself actionable
-    /// product-state content: the card explains that detection succeeded while
-    /// the official quota protocol is still pending. Other all-`.noData` rows
-    /// keep using the compact notice.
-    static func visibleProviders(
-        selected: [ProviderRateLimit.Provider],
-        snapshots: [ProviderRateLimit],
-        refreshing: Set<ProviderRateLimit.Provider>
-    ) -> [ProviderRateLimit.Provider] {
-        let hasContent = selected.contains { provider in
-            if provider == .cursor { return true }
-            return (snapshots.first(where: { $0.provider == provider })?.status ?? .noData) != .noData
-                || refreshing.contains(provider)
-        }
-        return hasContent ? selected : []
-    }
-
+    /// Shown only while the user has selected nothing at all — the selector
+    /// stays reachable so a product can be added back.
     private var noticeBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "info.circle")
                 .font(.system(size: 10))
-            Text(appState.selectedQuotaProviders.isEmpty
-                 ? "自动识别本机产品；请选择最多两个进行显示"
-                 : "已选择的产品暂无可用订阅配额")
+            Text("自动识别本机产品；请选择要显示的产品")
                 .font(.system(size: 11))
         }
         .foregroundStyle(Color(white: 0.4))
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Status line for an enabled product whose card has no meters to draw.
+    /// Only ever states what the data channel actually reported: the live
+    /// Codex endpoint's own reason (`emptyReason`), local detection, or —
+    /// when neither exists — that nothing has been read yet. Never invents
+    /// "used up" for a source that cannot tell.
+    static func emptyStateText(for snapshot: ProviderRateLimit, isDetected: Bool) -> String {
+        switch snapshot.emptyReason {
+        case .limitReached:
+            return "本期订阅配额已用满 · 等待额度重置"
+        case .noWindow:
+            return "当前没有生效的额度窗口"
+        case nil:
+            return isDetected
+                ? "暂未读取到订阅配额数据"
+                : "未检测到本机安装或登录"
+        }
     }
 }
 
@@ -242,26 +264,33 @@ private struct ProviderCard: View {
         case .error(let m): messageContent(text: m, action: "重试")
         case .noData:
             if isRefreshing {
-                Text("正在读取订阅配额…")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.5))
+                messageText("正在读取订阅配额…")
             } else if snapshot.provider == .cursor {
-                Text(cursorPendingText)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.5))
+                messageText(cursorPendingText)
             } else {
-                Text("未检测到可用订阅配额")
-                    .font(.system(size: 11))
-                    .foregroundStyle(Color(white: 0.5))
+                messageText(RateLimitCardView.emptyStateText(for: snapshot, isDetected: isProductDetected))
             }
         }
     }
 
+    /// Local discovery result only — never a credential or network read. It
+    /// separates "installed but nothing to show yet" from "not on this Mac".
+    private var isProductDetected: Bool {
+        appState.quotaProducts.first(where: { $0.provider == snapshot.provider })?.isDetected == true
+    }
+
     private var cursorPendingText: String {
-        let detected = appState.quotaProducts.first(where: { $0.provider == .cursor })?.isDetected == true
-        return detected
+        isProductDetected
             ? "已识别 Cursor · 等待官方配额接口"
             : "未检测到 Cursor · 等待官方配额接口"
+    }
+
+    /// Quiet single-line status text for the non-meter card states.
+    private func messageText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11))
+            .foregroundStyle(Color(white: 0.5))
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     /// One slot in the rows VStack: either a live `QuotaRow` or a placeholder

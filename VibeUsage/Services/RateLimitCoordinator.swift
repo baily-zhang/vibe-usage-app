@@ -147,10 +147,10 @@ final class RateLimitCoordinator {
             // behavior: whatever the session JSONL has. If the JSONL has
             // nothing but a previous live snapshot is still on screen, keep
             // it — its 「数据截至」 note communicates the age honestly, which
-            // beats collapsing the card over a transient network blip. On a
-            // cold read, distinguish "Codex is not installed/logged in" from
+            // beats replacing a real reading over a transient network blip. On
+            // a cold read, distinguish "Codex is not installed/logged in" from
             // an actual request failure: the latter must stay visible with a
-            // retry affordance instead of silently collapsing to `.noData`.
+            // retry affordance instead of being reported as 「暂无数据」.
             let failure = Self.classify(error)
             if failure == .unauthorized {
                 debugLog("[rate-limit] codex live fetch unauthorized — user logged out of Codex CLI")

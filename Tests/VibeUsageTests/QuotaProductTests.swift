@@ -28,17 +28,21 @@ struct QuotaProductTests {
         }
     }
 
+    /// A fresh install selects every locally detected product that has a
+    /// working adapter — there is no display cap any more, so a machine with
+    /// four of them gets four cards. Cursor stays out: it has no stable quota
+    /// protocol yet.
     @Test
-    func firstLaunchSelectsDetectedReadyProductsOnly() {
+    func firstLaunchSelectsEveryDetectedReadyProduct() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
 
         let selection = QuotaSelectionPreferences.resolve(
             defaults: defaults,
-            products: products(detected: [.codex, .kimiCode, .cursor])
+            products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .cursor])
         )
 
-        #expect(selection == [.codex, .kimiCode])
+        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok])
         #expect(defaults.bool(forKey: QuotaSelectionPreferences.initializedKey))
     }
 
@@ -73,7 +77,7 @@ struct QuotaProductTests {
     }
 
     @Test
-    func storedSelectionIsDeduplicatedAndCappedAtTwo() {
+    func storedSelectionIsDeduplicatedAndKeepsEveryProduct() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)
@@ -87,22 +91,25 @@ struct QuotaProductTests {
             products: products(detected: [])
         )
 
-        #expect(selection == [.kimiCode, .codex])
+        #expect(selection == [.kimiCode, .codex, .claudeCode])
     }
 
+    /// Selecting another product appends it. Evicting the oldest choice was an
+    /// artifact of the two-card layout and would now silently hide a product
+    /// the user enabled.
     @Test
-    func selectingThirdProductKeepsTwoMostRecentChoices() {
+    func selectingAnotherProductAppendsInsteadOfEvicting() {
         let selection = QuotaSelectionPreferences.updating(
-            [.codex, .claudeCode],
-            provider: .kimiCode,
+            [.codex, .claudeCode, .kimiCode],
+            provider: .grok,
             selected: true
         )
 
-        #expect(selection == [.claudeCode, .kimiCode])
+        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok])
     }
 
     @Test
-    func deselectingAProductDoesNotRepopulateItsSlot() {
+    func deselectingRemovesOnlyThatProduct() {
         let selection = QuotaSelectionPreferences.updating(
             [.claudeCode, .grok],
             provider: .claudeCode,
@@ -195,7 +202,7 @@ struct QuotaProductTests {
     }
 
     @Test @MainActor
-    func manualSelectionRemainsAvailableWhenTwoSlotsAreFull() {
+    func manualSelectionRemainsAvailableForEveryCatalogProduct() {
         let (defaults, suite) = defaults()
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: QuotaSelectionPreferences.initializedKey)

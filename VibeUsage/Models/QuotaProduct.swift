@@ -154,13 +154,12 @@ enum QuotaProductRegistry {
     }
 }
 
-/// Persistence and one-time migration for the two-slot selector. Keeping this
+/// Persistence and one-time migration for the product selector. Keeping this
 /// policy independent of AppState makes the "never repopulate an intentionally
 /// empty selection" invariant directly testable.
 enum QuotaSelectionPreferences {
     static let initializedKey = "quotaSelectionInitialized"
     static let selectedIDsKey = "selectedQuotaProductIds"
-    static let maximumSelectionCount = 2
 
     static func resolve(
         defaults: UserDefaults,
@@ -211,11 +210,10 @@ enum QuotaSelectionPreferences {
         defaults.set(normalizedSelection.contains(.claudeCode), forKey: "claudeRateLimitEnabled")
     }
 
-    /// Apply one explicit user choice to the two display slots. Detection is
-    /// only a first-launch recommendation: the manual selector must remain
-    /// usable when discovery is incomplete. Selecting a third product keeps
-    /// the two most recent choices instead of presenting a row of disabled
-    /// controls with no obvious recovery path.
+    /// Apply one explicit user choice to the display list. Detection is only a
+    /// first-launch recommendation: the manual selector must remain usable when
+    /// discovery is incomplete. Every selection is kept — the panel scrolls, so
+    /// there is no reason to evict an earlier choice to make room.
     static func updating(
         _ selection: [ProviderRateLimit.Provider],
         provider: ProviderRateLimit.Provider,
@@ -223,9 +221,6 @@ enum QuotaSelectionPreferences {
     ) -> [ProviderRateLimit.Provider] {
         var next = normalized(selection).filter { $0 != provider }
         if selected {
-            while next.count >= maximumSelectionCount {
-                next.removeFirst()
-            }
             next.append(provider)
         }
         return normalized(next)
@@ -235,10 +230,7 @@ enum QuotaSelectionPreferences {
         _ selection: [ProviderRateLimit.Provider]
     ) -> [ProviderRateLimit.Provider] {
         var seen: Set<ProviderRateLimit.Provider> = []
-        return selection
-            .filter { seen.insert($0).inserted }
-            .prefix(maximumSelectionCount)
-            .map { $0 }
+        return selection.filter { seen.insert($0).inserted }
     }
 
     private static func storedSelection(

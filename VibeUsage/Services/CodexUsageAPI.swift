@@ -230,8 +230,23 @@ enum CodexUsageAPI {
 
     static func parseUsageResponse(_ data: Data, now: Date = Date()) -> ProviderRateLimit? {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let rateLimit = obj["rate_limit"] as? [String: Any]
+              let rawRateLimit = obj["rate_limit"]
         else { return nil }
+
+        // `rate_limit` is nullable on the wire. An explicit null is the
+        // endpoint saying "this account currently has no rate-limit window"
+        // (quota for the period is consumed, or nothing is configured) — a
+        // successful read we can explain on the card. A *missing* key is a
+        // response shape we don't recognize and stays unparseable so the
+        // caller can fall back instead of reporting an empty account.
+        let rateLimit: [String: Any]
+        if rawRateLimit is NSNull {
+            rateLimit = [:]
+        } else if let dict = rawRateLimit as? [String: Any] {
+            rateLimit = dict
+        } else {
+            return nil
+        }
 
         var fiveHour: RateLimitWindow?
         var sevenDay: RateLimitWindow?
@@ -268,8 +283,20 @@ enum CodexUsageAPI {
             // 5h window means the limit isn't currently enforced — a fact the
             // JSONL scan can never assert (there it just means "idle > 5h").
             fiveHourNotEnforced: fiveHour == nil,
-            resetCreditsCount: resetCredits
+            resetCreditsCount: resetCredits,
+            emptyReason: (fiveHour == nil && sevenDay == nil)
+                ? (reportsLimitReached(rateLimit) ? .limitReached : .noWindow)
+                : nil
         )
+    }
+
+    /// The endpoint's own verdict on whether quota is currently consumable:
+    /// `limit_reached` when present, else the inverse of the older `allowed`
+    /// flag. Neither field present means "not claimed", never a guess.
+    private static func reportsLimitReached(_ rateLimit: [String: Any]) -> Bool {
+        if let reached = rateLimit["limit_reached"] as? Bool { return reached }
+        if let allowed = rateLimit["allowed"] as? Bool { return !allowed }
+        return false
     }
 
     private struct ParsedWindow {

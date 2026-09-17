@@ -221,7 +221,7 @@ struct RateLimitCoordinatorTests {
     }
 
     /// A machine with no Codex OAuth login and no sessions is an absent feature,
-    /// not a noisy network error; preserve the compact `.noData` treatment.
+    /// not a noisy network error; keep the plain `.noData` card (no retry).
     @Test @MainActor
     func missingCodexLoginWithoutFallbackStaysQuiet() async {
         let appState = AppState()
@@ -546,8 +546,9 @@ struct RateLimitCoordinatorTests {
         #expect(appState.rateLimits.first { $0.provider == .claudeCode } == cached)
     }
 
-    /// If a Claude executable exists but the live probe fails and no cache can
-    /// paint, surface the retryable card instead of collapsing it as no data.
+    /// A genuine endpoint failure with no usable fallback must remain visible
+    /// with a retry affordance; reporting it as plain `.noData` would hide the
+    /// failure behind an ordinary "nothing to show" card.
     @Test @MainActor
     func claudeProbeFailureWithoutCacheSurfacesRetryableError() async {
         let appState = AppState()
@@ -566,8 +567,9 @@ struct RateLimitCoordinatorTests {
         )
     }
 
-    /// Not having Claude installed is expected on many Macs and should retain
-    /// the quiet capability notice rather than looking like an app failure.
+    /// Not having Claude installed is expected on many Macs: the card stays
+    /// (per-product status, no retry button) rather than looking like an app
+    /// failure, and it never claims the quota is used up.
     @Test @MainActor
     func missingClaudeInstallationWithoutCacheStaysQuiet() async {
         let appState = AppState()
@@ -586,10 +588,10 @@ struct RateLimitCoordinatorTests {
     }
 
     /// An API-key / Bedrock session has no plan quota at all. That is a
-    /// permanent answer, so the card collapses rather than showing stale
-    /// percentages or implying a retry would help.
+    /// permanent answer: the card shows its neutral "no data" line instead of
+    /// stale percentages, and offers no retry that could not help.
     @Test @MainActor
-    func claudeAccountWithoutPlanLimitsCollapsesTheCard() async {
+    func claudeAccountWithoutPlanLimitsShowsAnEmptyCard() async {
         let appState = AppState()
         appState.claudeRateLimitEnabled = true
         let coordinator = RateLimitCoordinator(

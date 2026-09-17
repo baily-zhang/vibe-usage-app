@@ -30,10 +30,11 @@ enum CodexRateLimitReader {
             // the past — that window has provably rolled, and the snapshot's
             // `used_percent` is from the *previous* window, not the current
             // one. If BOTH slots were dropped (snapshot is fully expired)
-            // there's no live data to report; collapse the card via .noData
-            // rather than render confidently-wrong percentages. (When only one
-            // slot is stale we still show the fresh one — 5h and 7d windows
-            // expire independently.)
+            // there's no live data to report; report `.noData` rather than
+            // render confidently-wrong percentages. (When only one slot is
+            // stale we still show the fresh one — 5h and 7d windows expire
+            // independently.) A JSONL scan cannot say *why* nothing is left,
+            // so the card keeps a neutral copy for it.
             if snapshot.fiveHour == nil && snapshot.sevenDay == nil {
                 debugLog("[rate-limit] codex snapshot fully expired (no live windows) — reporting .noData")
                 return .init(provider: .codex, status: .noData, fetchedAt: now)
@@ -209,8 +210,9 @@ enum CodexRateLimitReader {
         // rolling-window semantics guarantee that the window has rolled over
         // and `used_percent` is from the *previous* window — showing it as
         // current was the source of "数据不对" feedback (e.g. an 8% reading
-        // hanging around 12 days after that window expired). The card layer
-        // collapses gracefully when no live slots remain (see `read()`).
+        // hanging around 12 days after that window expired). When no live
+        // slots remain the card reports plain `.noData` — it cannot say why
+        // (see `read()`).
         //
         // Without a `resets_at` at all we keep the window (utilization is
         // probably still meaningful; we just can't render the time bar) —

@@ -92,15 +92,91 @@ struct CodexUsageAPITests {
         #expect(snapshot.fiveHour?.resetsAt == now.addingTimeInterval(3600))
     }
 
-    /// Both windows null (no enforced limits at all) → `.noData`, so the card
-    /// collapses instead of rendering an empty shell.
+    /// Both windows null (no enforced limits at all) → `.noData` carrying the
+    /// reason the endpoint itself gave: it answered, it just has no window.
     @Test
-    func reportsNoDataWhenNoWindowIsEnforced() throws {
+    func windowlessResponseReportsNoEnforcedWindow() throws {
         let json = """
         { "plan_type": "free", "rate_limit": { "primary_window": null, "secondary_window": null } }
         """
         let snapshot = try #require(CodexUsageAPI.parseUsageResponse(Data(json.utf8)))
         #expect(snapshot.status == .noData)
+        #expect(snapshot.emptyReason == .noWindow)
+    }
+
+    /// `limit_reached` is the endpoint stating the quota is consumed — the only
+    /// evidence that lets the card say 「已用满」 instead of staying neutral.
+    @Test
+    func limitReachedIsCarriedAsTheEmptyReason() throws {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": null,
+            "secondary_window": null
+          }
+        }
+        """
+        let snapshot = try #require(CodexUsageAPI.parseUsageResponse(Data(json.utf8)))
+
+        #expect(snapshot.status == .noData)
+        #expect(snapshot.emptyReason == .limitReached)
+    }
+
+    /// Older payloads only carry `allowed`; its inverse is the same claim.
+    @Test
+    func disallowedWithoutLimitReachedAlsoMeansUsedUp() throws {
+        let json = """
+        { "plan_type": "plus", "rate_limit": { "allowed": false } }
+        """
+        let snapshot = try #require(CodexUsageAPI.parseUsageResponse(Data(json.utf8)))
+
+        #expect(snapshot.emptyReason == .limitReached)
+    }
+
+    /// A window is still a window: `limit_reached` next to real meters keeps
+    /// the card on its normal bar (100% included), never on an empty state.
+    @Test
+    func limitReachedAlongsideAWindowStillReportsMeters() throws {
+        let json = """
+        {
+          "plan_type": "plus",
+          "rate_limit": {
+            "allowed": false,
+            "limit_reached": true,
+            "primary_window": {
+              "used_percent": 100,
+              "limit_window_seconds": 604800,
+              "reset_at": 1784680014
+            }
+          }
+        }
+        """
+        let snapshot = try #require(CodexUsageAPI.parseUsageResponse(Data(json.utf8)))
+
+        #expect(snapshot.status == .ok)
+        #expect(snapshot.emptyReason == nil)
+        #expect(snapshot.sevenDay?.utilization == 100)
+    }
+
+    /// A nullable `rate_limit` is an answer, not schema drift: the account has
+    /// no rate-limit object at all right now. A *missing* key or a non-object
+    /// value stays unparseable so the caller falls back instead of claiming an
+    /// empty account.
+    @Test
+    func nullRateLimitObjectIsAnAnswerWhileOtherShapesAreNot() throws {
+        let nullObject = #"{ "plan_type": "plus", "rate_limit": null }"#
+        let snapshot = try #require(
+            CodexUsageAPI.parseUsageResponse(Data(nullObject.utf8))
+        )
+        #expect(snapshot.status == .noData)
+        #expect(snapshot.emptyReason == .noWindow)
+        #expect(snapshot.planLabel == "Plus")
+
+        let wrongType = #"{ "plan_type": "plus", "rate_limit": "unavailable" }"#
+        #expect(CodexUsageAPI.parseUsageResponse(Data(wrongType.utf8)) == nil)
     }
 
     @Test
