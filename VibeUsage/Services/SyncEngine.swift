@@ -42,79 +42,40 @@ actor SyncEngine {
             return .failure(.noRuntime)
         }
 
-        return await withCheckedContinuation { continuation in
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: runtime.executablePath)
-            process.arguments = runtime.syncArguments
-            debugLog("[SyncEngine] CMD: \(runtime.executablePath) \(runtime.syncArguments.joined(separator: " "))")
+        var env = ProcessInfo.processInfo.environment
+        let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
+        env["PATH"] = runtimeDir + (env["PATH"].map { ":\($0)" } ?? "")
+        env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
+        #if DEBUG
+        env["VIBE_USAGE_DEV"] = "1"
+        #endif
 
-            // Inherit environment for PATH, HOME, etc.
-            var env = ProcessInfo.processInfo.environment
-            // Ensure the runtime's directory is in PATH
-            let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
-            if let existingPath = env["PATH"] {
-                env["PATH"] = "\(runtimeDir):\(existingPath)"
-            } else {
-                env["PATH"] = runtimeDir
-            }
-            env.merge(AppConfig.cliIdentityEnvironment) { _, appValue in appValue }
-
-            // In dev mode, tell CLI to use config.dev.json
-            #if DEBUG
-            env["VIBE_USAGE_DEV"] = "1"
-            debugLog("[SyncEngine] VIBE_USAGE_DEV=1 (using config.dev.json)")
-            #endif
-            process.environment = env
-
-            let stdoutPipe = Pipe()
-            let stderrPipe = Pipe()
-            process.standardOutput = stdoutPipe
-            process.standardError = stderrPipe
-
-            // Timeout after 120 seconds
-            let timeoutItem = DispatchWorkItem {
-                if process.isRunning {
-                    process.terminate()
-                }
-            }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 120, execute: timeoutItem)
-
-            do {
-                try process.run()
-                process.waitUntilExit()
-                timeoutItem.cancel()
-
-                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
-                let stdout = String(data: stdoutData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let stderr = String(data: stderrData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                debugLog("[SyncEngine] Exit: \(process.terminationStatus)")
-                debugLog("[SyncEngine] stdout: \(stdout.prefix(500))")
-                debugLog("[SyncEngine] stderr: \(stderr.prefix(500))")
-
-                let combined = "\(stdout)\n\(stderr)"
-
-                if process.terminationStatus == 0 {
-                    // Parse success messages
-                    if stdout.contains("Synced") || stdout.contains("No new usage data") {
-                        continuation.resume(returning: .success(stdout))
-                    } else {
-                        continuation.resume(returning: .success(stdout.isEmpty ? "同步完成" : stdout))
-                    }
-                } else {
-                    // Check for specific errors
-                    if combined.contains("Invalid API key") || combined.contains("UNAUTHORIZED") {
-                        continuation.resume(returning: .failure(.unauthorized))
-                    } else {
-                        let msg = stderr.isEmpty ? stdout : stderr
-                        continuation.resume(returning: .failure(.processFailure(friendlyFailureMessage(msg, exitCode: process.terminationStatus))))
-                    }
-                }
-            } catch {
-                timeoutItem.cancel()
-                continuation.resume(returning: .failure(.processFailure(error.localizedDescription)))
-            }
+        do {
+            let output = try await CLIProcessRunner.run(
+                executable: runtime.executablePath, arguments: runtime.syncArguments,
+                environment: env, timeout: 120
+            )
+            return interpret(output)
+        } catch {
+            return .failure(.processFailure(error.localizedDescription))
         }
+    }
+
+    func interpret(_ output: CLIProcessRunner.Output) -> Result<String, SyncError> {
+        if output.timedOut { return .failure(.timeout) }
+        let stdout = output.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let stderr = output.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        debugLog("[SyncEngine] Exit: \(output.exitCode)")
+        debugLog("[SyncEngine] stdout: \(stdout.prefix(500))")
+        debugLog("[SyncEngine] stderr: \(stderr.prefix(500))")
+        if output.exitCode == 0 {
+            return .success(stdout.isEmpty ? "同步完成" : stdout)
+        }
+        let combined = [stdout, stderr].filter { !$0.isEmpty }.joined(separator: "\n")
+        if combined.contains("Invalid API key") || combined.contains("UNAUTHORIZED") {
+            return .failure(.unauthorized)
+        }
+        return .failure(.processFailure(friendlyFailureMessage(combined, exitCode: output.exitCode)))
     }
 
     private func friendlyFailureMessage(_ message: String, exitCode: Int32) -> String {
