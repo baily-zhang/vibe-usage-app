@@ -3,6 +3,14 @@ import Foundation
 enum AppConfig {
     static let version = "0.5.10"
 
+    #if VIBE_USAGE_EXTERNAL_TEST
+    static let displayName = "Vibe Usage Test"
+    static let isExternalTest = true
+    #else
+    static let displayName = "Vibe Usage"
+    static let isExternalTest = false
+    #endif
+
     static let cliIdentityEnvironment = [
         "VIBE_USAGE_SURFACE": "mac-app",
         "VIBE_USAGE_SURFACE_VERSION": version,

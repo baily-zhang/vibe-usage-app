@@ -17,12 +17,12 @@ struct RateLimitCardViewTests {
     @Test
     func enabledClaudeRemainsVisibleBesideAvailableCodex() {
         let visible = RateLimitCardView.visibleProviders(
-            codex: snapshot(provider: .codex, status: .ok),
-            claude: snapshot(provider: .claudeCode, status: .noData),
-            codexEnabled: true,
-            claudeEnabled: true,
-            codexRefreshing: false,
-            claudeRefreshing: false
+            selected: [.codex, .claudeCode],
+            snapshots: [
+                snapshot(provider: .codex, status: .ok),
+                snapshot(provider: .claudeCode, status: .noData),
+            ],
+            refreshing: []
         )
 
         #expect(visible == [.codex, .claudeCode])
@@ -33,12 +33,12 @@ struct RateLimitCardViewTests {
     @Test
     func twoSettledEmptyProvidersUseTheNoticeBar() {
         let visible = RateLimitCardView.visibleProviders(
-            codex: snapshot(provider: .codex, status: .noData),
-            claude: snapshot(provider: .claudeCode, status: .noData),
-            codexEnabled: true,
-            claudeEnabled: true,
-            codexRefreshing: false,
-            claudeRefreshing: false
+            selected: [.codex, .claudeCode],
+            snapshots: [
+                snapshot(provider: .codex, status: .noData),
+                snapshot(provider: .claudeCode, status: .noData),
+            ],
+            refreshing: []
         )
 
         #expect(visible.isEmpty)
@@ -47,12 +47,12 @@ struct RateLimitCardViewTests {
     @Test
     func onlyEnabledProviderIsVisible() {
         let visible = RateLimitCardView.visibleProviders(
-            codex: snapshot(provider: .codex, status: .ok),
-            claude: snapshot(provider: .claudeCode, status: .ok),
-            codexEnabled: false,
-            claudeEnabled: true,
-            codexRefreshing: false,
-            claudeRefreshing: false
+            selected: [.claudeCode],
+            snapshots: [
+                snapshot(provider: .codex, status: .ok),
+                snapshot(provider: .claudeCode, status: .ok),
+            ],
+            refreshing: []
         )
 
         #expect(visible == [.claudeCode])
@@ -61,12 +61,12 @@ struct RateLimitCardViewTests {
     @Test
     func refreshingClaudeKeepsBothEnabledProvidersVisible() {
         let visible = RateLimitCardView.visibleProviders(
-            codex: snapshot(provider: .codex, status: .noData),
-            claude: snapshot(provider: .claudeCode, status: .noData),
-            codexEnabled: true,
-            claudeEnabled: true,
-            codexRefreshing: false,
-            claudeRefreshing: true
+            selected: [.codex, .claudeCode],
+            snapshots: [
+                snapshot(provider: .codex, status: .noData),
+                snapshot(provider: .claudeCode, status: .noData),
+            ],
+            refreshing: [.claudeCode]
         )
 
         #expect(visible == [.codex, .claudeCode])
@@ -75,14 +75,39 @@ struct RateLimitCardViewTests {
     @Test
     func disabledRefreshingProviderIsNotVisible() {
         let visible = RateLimitCardView.visibleProviders(
-            codex: snapshot(provider: .codex, status: .ok),
-            claude: snapshot(provider: .claudeCode, status: .noData),
-            codexEnabled: true,
-            claudeEnabled: false,
-            codexRefreshing: false,
-            claudeRefreshing: true
+            selected: [.codex],
+            snapshots: [
+                snapshot(provider: .codex, status: .ok),
+                snapshot(provider: .claudeCode, status: .noData),
+            ],
+            refreshing: [.claudeCode]
         )
 
         #expect(visible == [.codex])
+    }
+
+    @Test
+    func selectedCursorKeepsItsPendingCardVisibleBesideGrok() {
+        let visible = RateLimitCardView.visibleProviders(
+            selected: [.grok, .cursor],
+            snapshots: [
+                snapshot(provider: .grok, status: .ok),
+                snapshot(provider: .cursor, status: .noData),
+            ],
+            refreshing: []
+        )
+
+        #expect(visible == [.grok, .cursor])
+    }
+
+    @Test
+    func cursorPendingStateIsVisibleWhenSelectedAlone() {
+        let visible = RateLimitCardView.visibleProviders(
+            selected: [.cursor],
+            snapshots: [snapshot(provider: .cursor, status: .noData)],
+            refreshing: []
+        )
+
+        #expect(visible == [.cursor])
     }
 }

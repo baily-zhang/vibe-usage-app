@@ -11,23 +11,64 @@ enum CLIProcessRunner {
         let timedOut: Bool
     }
 
+    /// Tracks the live child so task cancellation can stop it, using the same
+    /// SIGTERM-then-SIGKILL ladder as the deadline.
+    private final class Control: @unchecked Sendable {
+        private let lock = NSLock()
+        private var process: Process?
+        private var cancelled = false
+
+        var wasCancelled: Bool { lock.withLock { cancelled } }
+
+        func register(_ process: Process) -> Bool {
+            lock.withLock {
+                guard !cancelled else { return false }
+                self.process = process
+                return true
+            }
+        }
+
+        func unregister(_ process: Process) {
+            lock.withLock { if self.process === process { self.process = nil } }
+        }
+
+        func cancel() {
+            let process = lock.withLock { () -> Process? in
+                cancelled = true
+                return self.process
+            }
+            guard let process, process.isRunning else { return }
+            process.terminate()
+            DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+            }
+        }
+    }
+
     static func run(
         executable: String,
         arguments: [String],
         environment: [String: String],
         timeout: TimeInterval
     ) async throws -> Output {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async {
-                do {
-                    continuation.resume(returning: try execute(
-                        executable: executable, arguments: arguments,
-                        environment: environment, timeout: timeout
-                    ))
-                } catch {
-                    continuation.resume(throwing: error)
+        let control = Control()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    do {
+                        let output = try execute(
+                            executable: executable, arguments: arguments,
+                            environment: environment, timeout: timeout, control: control
+                        )
+                        if control.wasCancelled { throw CancellationError() }
+                        continuation.resume(returning: output)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
+        } onCancel: {
+            control.cancel()
         }
     }
 
@@ -41,7 +82,8 @@ enum CLIProcessRunner {
         executable: String,
         arguments: [String],
         environment: [String: String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        control: Control
     ) throws -> Output {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("vibe-usage-process-\(UUID().uuidString)")
@@ -67,6 +109,11 @@ enum CLIProcessRunner {
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
+        guard control.register(process) else {
+            process.terminate()
+            throw CancellationError()
+        }
+        defer { control.unregister(process) }
 
         let deadline = Deadline()
         let killItem = DispatchWorkItem {

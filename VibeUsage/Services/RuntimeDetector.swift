@@ -2,10 +2,28 @@ import Foundation
 
 /// Detects available Node.js runtime (bun preferred, npx fallback)
 enum RuntimeDetector {
+    // Always run the published CLI at `latest` (see AGENTS.md "CLI version
+    // policy"): pinning an exact version silently rots — a pin can predate the
+    // very command the app calls — and it costs users every CLI fix until the
+    // next app release. Compatibility is enforced by the versioned protocols
+    // the app consumes (e.g. `QuotaCLIBridge.schemaVersion`) plus actionable
+    // "update the CLI" errors, never by freezing a version here.
     static let defaultPackageSpecifier = "@vibe-cafe/vibe-usage@latest"
+    private static var bundledPackageSpecifier: String? {
+        #if VIBE_USAGE_EXTERNAL_TEST
+        Bundle.main.url(forResource: "vibe-usage-cli", withExtension: "tgz")?.path
+        #else
+        nil
+        #endif
+    }
     static var packageSpecifier: String {
         ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"]
+            ?? bundledPackageSpecifier
             ?? defaultPackageSpecifier
+    }
+    private static var usesBundledPackage: Bool {
+        ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] == nil
+            && bundledPackageSpecifier != nil
     }
 
     struct Runtime {
@@ -19,11 +37,28 @@ enum RuntimeDetector {
     }
 
     static func arguments(runtimeName: String, command: [String]) -> [String] {
+        arguments(
+            runtimeName: runtimeName,
+            command: command,
+            packageSpecifier: packageSpecifier,
+            usesBundledPackage: usesBundledPackage
+        )
+    }
+
+    static func arguments(
+        runtimeName: String,
+        command: [String],
+        packageSpecifier: String,
+        usesBundledPackage: Bool
+    ) -> [String] {
+        if usesBundledPackage {
+            return ["--yes", "--package", packageSpecifier, "vibe-usage"] + command
+        }
         switch runtimeName {
         case "bun":
-            ["x", packageSpecifier] + command
+            return ["x", packageSpecifier] + command
         default:
-            ["--yes", packageSpecifier] + command
+            return ["--yes", packageSpecifier] + command
         }
     }
 
@@ -118,6 +153,12 @@ enum RuntimeDetector {
 
     /// Detect the best available JS runtime
     static func detect() -> Runtime? {
+        // External-test bundles carry an exact local CLI tarball. bun x does
+        // not accept package-file paths, so this variant intentionally uses
+        // npx and reports no runtime if Node/npm is missing.
+        if usesBundledPackage {
+            return findExecutable("npx").map { Runtime(executablePath: $0, name: "npx") }
+        }
         // Local package paths are an integration-test hook; bun x does not
         // accept them, while npx does.
         if ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] != nil,

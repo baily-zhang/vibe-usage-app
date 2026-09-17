@@ -15,6 +15,64 @@ security find-identity -v -p codesigning
 xcrun notarytool history --keychain-profile VibeUsage
 ```
 
+## CLI dependency and release ordering
+
+The app runs whatever `@vibe-cafe/vibe-usage@latest` resolves to, so a released
+CLI must keep the contracts the app consumes (config JSON, sync output, and the
+`quota` protocol with `schemaVersion` 1). Versions older than 0.11.0 have no
+`quota` command at all — the app must report that as an actionable "update the
+CLI" error instead of an empty card. Never reintroduce an exact-version pin:
+pins rot silently and freeze users out of CLI fixes.
+
+Before publishing the CLI, validate the actual local npm package:
+
+```bash
+node scripts/check-cli.mjs --from-local ../vibe-usage
+node --test scripts/check-cli.test.mjs
+```
+
+Merge and publish that CLI version first (0.11.0 shipped the quota commands). Then run:
+
+```bash
+node scripts/check-cli.mjs
+```
+
+The default check downloads the current `latest` npm tarball and validates the
+package's JSON config output, discovery, and all three quota adapters using
+temporary directories without credentials. It ignores `VIBE_USAGE_CLI_PACKAGE`.
+`build-app.sh` runs this check before creating a normal app bundle, so an
+unpublished, missing, or incompatible CLI prevents packaging. `swift build`
+alone only compiles the app and does not validate its runtime npm dependency.
+If the planned version is taken before publication, update both CLI manifests
+and `RuntimeDetector.defaultPackageSpecifier` to the reviewed version together.
+
+Pre-publish Swift integration uses `VIBE_USAGE_CLI_PACKAGE` with the local
+checkout and a temporary `VIBE_USAGE_CONFIG_DIR`; see `CLIBridgeTests`.
+This verifies local compatibility and does not satisfy the production npm gate.
+
+## External test build
+
+An external test build uses the production API and the normal per-user config,
+but includes the local, redacted quota diagnostic exporter and embeds an exact
+CLI checkout. Both repositories must be clean so the package can record the app
+commit plus the CLI commit and package version. Build it only with the explicit
+flags:
+
+```bash
+./scripts/build-app.sh \
+  --external-test \
+  --cli-source ../vibe-usage \
+  --universal \
+  --notarize
+```
+
+Do not generate or publish an Appcast for an external test build. Ordinary
+Release builds omit the diagnostic implementation, UI, separate Keychain
+namespace, and bundled CLI at compile time. When release credentials are not
+available, omit `--notarize` to create an ad-hoc signed
+`dist/VibeUsage-Test.zip`; testers must use macOS Control-click → Open. The
+signed/notarized path remains the preferred wider-distribution artifact.
+
 ## Moving releases to another Mac
 
 The Sparkle key was rotated for `v0.5.4`. Every later release must use the

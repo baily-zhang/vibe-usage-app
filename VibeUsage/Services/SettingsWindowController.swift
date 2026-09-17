@@ -28,7 +28,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: settingsView)
 
         let window = NSWindow(contentViewController: hostingController)
-        window.title = "Vibe Usage Settings"
+        window.title = "\(AppConfig.displayName) Settings"
         window.styleMask = [.titled, .closable]
         window.setContentSize(NSSize(width: 460, height: 480))
         window.center()

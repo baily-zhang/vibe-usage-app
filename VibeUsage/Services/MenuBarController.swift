@@ -2,6 +2,35 @@ import AppKit
 import SwiftUI
 import Observation
 
+/// Pure geometry for placing the dashboard beneath its menu-bar item.
+/// Kept separate from AppKit coordinate conversion so edge and multi-display
+/// behavior can be covered without creating a real status item in tests.
+enum MenuBarPanelGeometry {
+    static func topLeftPoint(
+        anchorFrame: NSRect,
+        panelSize: NSSize,
+        visibleFrame: NSRect,
+        topGap: CGFloat,
+        edgeInset: CGFloat
+    ) -> NSPoint {
+        let minimumX = visibleFrame.minX + edgeInset
+        let maximumX = visibleFrame.maxX - panelSize.width - edgeInset
+        let targetX = anchorFrame.maxX - panelSize.width
+        let x = maximumX >= minimumX
+            ? max(minimumX, min(targetX, maximumX))
+            : visibleFrame.minX
+
+        let maximumTopY = visibleFrame.maxY
+        let minimumTopY = visibleFrame.minY + panelSize.height
+        let targetTopY = anchorFrame.minY - topGap
+        let y = minimumTopY <= maximumTopY
+            ? max(minimumTopY, min(targetTopY, maximumTopY))
+            : visibleFrame.maxY
+
+        return NSPoint(x: x, y: y)
+    }
+}
+
 /// SwiftUI view rendered inside the NSStatusItem button.
 /// Using NSHostingView for the status item content is the best-practice workaround
 /// for proper vertical centering of multi-line text — attributedTitle and
@@ -248,12 +277,9 @@ final class MenuBarController: NSObject {
         positionPanel(panel)
 
         Task { await appState.fetchUsageDataIfNeeded() }
-        // Popover open refreshes both Codex (live endpoint, CLI-token auth —
-        // no prompts) and Claude (local capture file). 60s cooldown so rapid
-        // open/close doesn't re-hit the endpoint or re-parse the capture file.
-        Task { await appState.refreshCodexRateLimitIfNeeded() }
-        Task { await appState.refreshClaudeRateLimitIfNeeded() }
-        // Live-update the Claude card while the panel is on screen.
+        // Popover open refreshes selected quota products only. The coordinator
+        // applies a per-provider 60s cooldown so rapid open/close stays cheap.
+        Task { await appState.refreshSelectedRateLimitsIfNeeded() }
         appState.rateLimitPanelVisibilityChanged(visible: true)
 
         // Keep activation policy reconciliation centralized. The app is
@@ -331,25 +357,39 @@ final class MenuBarController: NSObject {
     }
 
     private func positionPanel(_ panel: PopoverPanel) {
-        guard let buttonWindow = statusItem.button?.window else { return }
-        let buttonFrame = buttonWindow.frame
+        guard let buttonWindow = statusItem.button?.window,
+              let buttonFrame = statusItemButtonScreenFrame()
+        else { return }
 
-        // Use the constant width — on first open SwiftUI hasn't laid out yet so
-        // panel.frame.size.width can be 0/stale, which sends the right-aligned
-        // anchor off-screen.
-        let width = Self.panelWidth
+        let screen = NSScreen.screens.first(where: { $0.frame.contains(
+            NSPoint(x: buttonFrame.midX, y: buttonFrame.midY)
+        ) }) ?? buttonWindow.screen ?? NSScreen.main
+        guard let screen else { return }
 
-        // Anchor the panel's right edge to the icon's right edge so a far-right icon
-        // doesn't push the panel off-screen. Use setFrameTopLeftPoint so we don't
-        // depend on the (possibly stale) height for the Y calculation.
-        var topLeftX = buttonFrame.maxX - width
-        let topLeftY = buttonFrame.minY - Self.panelTopGap
+        // Use constants because the first SwiftUI layout pass can temporarily
+        // report a zero or stale panel size. Clamp both axes to the selected
+        // display's visible frame for notched menu bars and stacked displays.
+        let topLeft = MenuBarPanelGeometry.topLeftPoint(
+            anchorFrame: buttonFrame,
+            panelSize: NSSize(width: Self.panelWidth, height: Self.panelHeight),
+            visibleFrame: screen.visibleFrame,
+            topGap: Self.panelTopGap,
+            edgeInset: 8
+        )
+        panel.setFrameTopLeftPoint(topLeft)
+    }
 
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(buttonFrame.origin) }) ?? NSScreen.main {
-            let visible = screen.visibleFrame
-            topLeftX = max(visible.minX + 8, min(topLeftX, visible.maxX - width - 8))
-        }
-        panel.setFrameTopLeftPoint(NSPoint(x: topLeftX, y: topLeftY))
+    private func statusItemButtonScreenFrame() -> NSRect? {
+        guard let button = statusItem.button, let buttonWindow = button.window else { return nil }
+
+        // A status item's window can be the shared, screen-wide menu-bar window
+        // on newer macOS releases. Using `buttonWindow.frame` therefore anchors
+        // every popover to the left edge of that screen. Convert the button's
+        // own bounds through its window to obtain the actual icon rectangle.
+        let buttonFrameInWindow = button.convert(button.bounds, to: nil)
+        let buttonFrame = buttonWindow.convertToScreen(buttonFrameInWindow)
+        guard buttonFrame.width > 0, buttonFrame.height > 0 else { return nil }
+        return buttonFrame
     }
 
     // MARK: - Animation
@@ -481,7 +521,7 @@ final class MenuBarController: NSObject {
                 // Ignore clicks on our own status-bar button — `button.action` runs on
                 // mouse-up and will toggle the panel itself. If we close here on
                 // mouse-down, the subsequent mouse-up reopens it.
-                if let buttonFrame = self.statusItem.button?.window?.frame,
+                if let buttonFrame = self.statusItemButtonScreenFrame(),
                    buttonFrame.contains(NSEvent.mouseLocation) {
                     return
                 }

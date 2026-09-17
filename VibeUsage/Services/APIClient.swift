@@ -16,7 +16,6 @@ struct APIClient: Sendable {
         guard let url = components.url else { throw APIError.invalidURL }
 
         debugLog("[APIClient] GET \(url.absoluteString)")
-        debugLog("[APIClient] Authorization: Bearer \(apiKey.prefix(12))...")
 
         var request = URLRequest(url: url)
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
@@ -29,8 +28,7 @@ struct APIClient: Sendable {
             throw APIError.invalidResponse
         }
 
-        let body = String(data: data, encoding: .utf8) ?? "(non-utf8)"
-        debugLog("[APIClient] Status: \(httpResponse.statusCode), Body: \(body.prefix(200))")
+        debugLog("[APIClient] Status: \(httpResponse.statusCode), bytes: \(data.count)")
 
         switch httpResponse.statusCode {
         case 200:

@@ -300,4 +300,11 @@ private final class HomeOverridingFileManager: FileManager, @unchecked Sendable 
     }
 
     override var homeDirectoryForCurrentUser: URL { home }
+
+    override func isExecutableFile(atPath path: String) -> Bool {
+        let candidate = URL(fileURLWithPath: path).standardizedFileURL.path
+        let fixtureRoot = home.standardizedFileURL.path + "/"
+        guard candidate.hasPrefix(fixtureRoot) else { return false }
+        return super.isExecutableFile(atPath: path)
+    }
 }

@@ -55,4 +55,24 @@ final class CLIBridgeTests: XCTestCase {
         let rootsAfterRemoval = try await CLIBridge.configRoots()
         XCTAssertNil(rootsAfterRemoval["grok"])
     }
+
+    func testQuotaCommandAgainstLocalCLI() async throws {
+        guard ProcessInfo.processInfo.environment["VIBE_USAGE_CLI_PACKAGE"] != nil else {
+            throw XCTSkip("需要本地 CLI 路径")
+        }
+
+        // Exercise both a deterministic credential-gated product and Grok's
+        // local-only adapter. Grok may be `.ok` or `.noData` depending on the
+        // fixture machine, but it must always round-trip as its own product.
+        let snapshots = try await QuotaCLIBridge.fetch(
+            providers: [.zCode, .grok],
+            zCodeAPIKey: nil,
+            zCodeRegion: .bigModel
+        )
+
+        XCTAssertEqual(snapshots.map(\.provider), [.zCode, .grok])
+        XCTAssertEqual(snapshots.first(where: { $0.provider == .zCode })?.status, .unauthorized)
+        let grokStatus = snapshots.first(where: { $0.provider == .grok })?.status
+        XCTAssertTrue(grokStatus == .ok || grokStatus == .noData || grokStatus == .retryableError)
+    }
 }

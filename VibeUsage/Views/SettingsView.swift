@@ -19,6 +19,13 @@ struct SettingsView: View {
     @State private var extraRoots: CLIBridge.ExtraRoots = [:]
     @State private var extraRootsError: String?
     @State private var editingExtraRoots = false
+    @State private var zCodeAPIKey = ""
+    @State private var isSavingZCodeAPIKey = false
+    @State private var zCodeAPIKeyMessage: String?
+    @State private var zCodeAPIKeyError: String?
+    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+    @State private var diagnosticExportMessage: String?
+    #endif
 
     private let extraRootSources = [
         (id: "codex", name: "Codex"),
@@ -199,35 +206,107 @@ struct SettingsView: View {
 
             // Subscription quota monitoring
             Section {
-                Toggle("显示 Codex 订阅配额", isOn: Binding(
-                    get: { appState.codexRateLimitEnabled },
-                    set: { newValue in
-                        Task { await appState.setCodexRateLimitEnabled(newValue) }
-                    }
-                ))
-                .tint(.green)
-
-                Toggle(isOn: Binding(
-                    get: { appState.claudeRateLimitEnabled },
-                    set: { newValue in
-                        Task { await appState.setClaudeRateLimitEnabled(newValue) }
-                    }
-                )) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("显示 Claude 订阅配额")
-                        // Only worth explaining when the numbers come from the
-                        // Claude Code copy bundled inside Claude Desktop, which
-                        // the user never installed themselves.
-                        if appState.claudeUsesDesktopBundledCLI {
-                            Text("数据来源：Claude Desktop")
+                ForEach(appState.quotaProducts) { product in
+                    Toggle(isOn: Binding(
+                        get: { appState.isQuotaProviderSelected(product.provider) },
+                        set: { newValue in
+                            Task {
+                                await appState.setQuotaProductSelected(
+                                    product.provider,
+                                    selected: newValue
+                                )
+                            }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(product.displayName)
+                            Text(appState.quotaProductStatusText(product))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if product.provider == .claudeCode,
+                               appState.claudeUsesDesktopBundledCLI {
+                                Text("数据来源：Claude Desktop")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    .tint(.green)
+                    .disabled(
+                        !appState.isQuotaProviderSelected(product.provider)
+                            && !appState.canSelectQuotaProvider(product.provider)
+                    )
+                }
+
+                if appState.quotaProducts.first(where: { $0.provider == .zCode })?.isDetected == true
+                    || appState.zCodeAPIKeyConfigured {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("ZCode 使用用户明确提供的区域 API Key；不会读取 ZCode 登录凭据，也不会向另一区域试发。")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Picker("账号区域", selection: Binding(
+                            get: { appState.zCodeQuotaRegion },
+                            set: { region in
+                                zCodeAPIKey = ""
+                                zCodeAPIKeyMessage = nil
+                                zCodeAPIKeyError = nil
+                                Task { await appState.setZCodeQuotaRegion(region) }
+                            }
+                        )) {
+                            ForEach(ZCodeQuotaRegion.allCases) { region in
+                                Text(region.displayName).tag(region)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(isSavingZCodeAPIKey)
+                        HStack(spacing: 8) {
+                            SecureField(
+                                appState.zCodeAPIKeyConfigured
+                                    ? "输入新 Key 以更新"
+                                    : appState.zCodeQuotaRegion.apiKeyName,
+                                text: $zCodeAPIKey
+                            )
+                            .textFieldStyle(.roundedBorder)
+                            Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
+                                Task { await saveZCodeAPIKey() }
+                            }
+                            .disabled(
+                                zCodeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                                    || isSavingZCodeAPIKey
+                            )
+                            if appState.zCodeAPIKeyConfigured {
+                                Button("移除", role: .destructive) {
+                                    Task { await removeZCodeAPIKey() }
+                                }
+                                .disabled(isSavingZCodeAPIKey)
+                            }
+                        }
+                        if let zCodeAPIKeyMessage {
+                            Text(zCodeAPIKeyMessage)
+                                .font(.caption)
+                                .foregroundStyle(.green)
+                        }
+                        if let zCodeAPIKeyError {
+                            Text(zCodeAPIKeyError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
                         }
                     }
                 }
-                .tint(.green)
+
+                Button("重新检测本机产品") {
+                    appState.rediscoverQuotaProducts()
+                }
             } header: {
-                Text("订阅配额")
+                Text("订阅配额（\(appState.selectedQuotaProviders.count)/\(QuotaSelectionPreferences.maximumSelectionCount)）")
+            } footer: {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("最多显示两个产品；选择新产品会自动替换最早选择的产品。")
+                    Text("检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。")
+                    Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
+                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key。")
+                }
+                .font(.caption)
             }
 
             // Menu bar display
@@ -269,10 +348,32 @@ struct SettingsView: View {
                     .font(.caption)
             }
 
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            Section {
+                Button("导出诊断日志…") {
+                    exportDiagnosticLog()
+                }
+                if let diagnosticExportMessage {
+                    Text(diagnosticExportMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("测试诊断")
+            } footer: {
+                Text("仅测试构建可用。日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
+                    .font(.caption)
+            }
+            #endif
+
             // About & Updates
             Section {
                 LabeledContent("版本") {
-                    Text(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
+                    Text(
+                        AppConfig.isExternalTest
+                            ? "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version) · 外测"
+                            : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
+                    )
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -417,6 +518,56 @@ struct SettingsView: View {
         }
     }
 
+    private func saveZCodeAPIKey() async {
+        isSavingZCodeAPIKey = true
+        zCodeAPIKeyMessage = nil
+        zCodeAPIKeyError = nil
+        defer { isSavingZCodeAPIKey = false }
+        do {
+            try appState.storeZCodeAPIKey(zCodeAPIKey)
+            zCodeAPIKey = ""
+            zCodeAPIKeyMessage = "已安全保存到 Vibe Usage 钥匙串"
+            if appState.isQuotaProviderSelected(.zCode) {
+                await appState.refreshRateLimit(for: .zCode)
+            }
+        } catch {
+            zCodeAPIKeyError = error.localizedDescription
+        }
+    }
+
+    private func removeZCodeAPIKey() async {
+        isSavingZCodeAPIKey = true
+        zCodeAPIKeyMessage = nil
+        zCodeAPIKeyError = nil
+        defer { isSavingZCodeAPIKey = false }
+        do {
+            try appState.storeZCodeAPIKey(nil)
+            zCodeAPIKey = ""
+            zCodeAPIKeyMessage = "已移除；ZCode 配额显示已关闭"
+        } catch {
+            zCodeAPIKeyError = error.localizedDescription
+        }
+    }
+
+    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+    private func exportDiagnosticLog() {
+        diagnosticExportMessage = nil
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = "vibe-usage-diagnostics-\(Int(Date().timeIntervalSince1970)).jsonl"
+        panel.prompt = "导出"
+        panel.message = "请选择脱敏测试诊断日志的保存位置"
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+
+        do {
+            try TestDiagnosticLog.export(to: destination)
+            diagnosticExportMessage = "诊断日志已导出"
+        } catch {
+            diagnosticExportMessage = "导出失败：\(error.localizedDescription)"
+        }
+    }
+    #endif
+
     private func setAutoStart(_ enabled: Bool) {
         do {
             if enabled {
@@ -439,7 +590,7 @@ struct SettingsView: View {
         let hostname = Host.current().localizedName?.replacingOccurrences(of: ".local", with: "")
         let device: DeviceCodeResponse
         do {
-            device = try await requestDeviceCode(baseURL: baseURL, clientName: "Vibe Usage.app", hostname: hostname)
+            device = try await requestDeviceCode(baseURL: baseURL, clientName: "\(AppConfig.displayName).app", hostname: hostname)
         } catch {
             relinkError = "无法连接服务端：\(error.localizedDescription)"
             return

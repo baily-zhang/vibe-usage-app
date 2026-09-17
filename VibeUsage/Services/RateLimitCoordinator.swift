@@ -29,11 +29,19 @@ final class RateLimitCoordinator {
     private var codexRefreshID: UUID?
     private var claudeRefreshTask: Task<Void, Never>?
     private var claudeRefreshID: UUID?
+    private var cliRefreshTask: Task<Void, Never>?
+    private var cliRefreshID: UUID?
+    private var activeCLIProviders: Set<ProviderRateLimit.Provider> = []
+    private var lastCLIFetchAt: [ProviderRateLimit.Provider: Date] = [:]
+    private var cliCancellationGeneration: UInt = 0
     private let fetchCodexLive: @MainActor () async throws -> ProviderRateLimit
     private let loadCodexCache: @MainActor () async -> ProviderRateLimit?
     private let readCodexFallback: @MainActor () async -> ProviderRateLimit
     private let fetchClaudeLive: @MainActor () async throws -> ProviderRateLimit
     private let loadClaudeCache: @MainActor () async -> ProviderRateLimit?
+    private let fetchCLIQuotas: @MainActor (
+        [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
+    ) async throws -> [ProviderRateLimit]
 
     init(
         appState: AppState,
@@ -51,6 +59,15 @@ final class RateLimitCoordinator {
         },
         loadClaudeCache: @escaping @MainActor () async -> ProviderRateLimit? = {
             await RateLimitCoordinator.loadClaudeDiskSnapshot()
+        },
+        fetchCLIQuotas: @escaping @MainActor (
+            [ProviderRateLimit.Provider], String?, ZCodeQuotaRegion
+        ) async throws -> [ProviderRateLimit] = { providers, zCodeAPIKey, zCodeRegion in
+            try await QuotaCLIBridge.fetch(
+                providers: providers,
+                zCodeAPIKey: zCodeAPIKey,
+                zCodeRegion: zCodeRegion
+            )
         }
     ) {
         self.appState = appState
@@ -59,6 +76,7 @@ final class RateLimitCoordinator {
         self.readCodexFallback = readCodexFallback
         self.fetchClaudeLive = fetchClaudeLive
         self.loadClaudeCache = loadClaudeCache
+        self.fetchCLIQuotas = fetchCLIQuotas
     }
 
     /// Refresh Codex unconditionally: live endpoint first, JSONL fallback.
@@ -92,6 +110,9 @@ final class RateLimitCoordinator {
 
     private func performCodexRefresh() async {
         guard let appState, appState.codexRateLimitEnabled else { return }
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaRefreshStarted([.codex])
+        #endif
 
         // Instant paint: if nothing usable is on screen yet, surface the last
         // *live* snapshot (single small file, negligible read) so the card
@@ -114,8 +135,14 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.codexRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaCancelled([.codex])
+            #endif
             return
         } catch {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaFailure([.codex], error: error)
+            #endif
             // Offline / endpoint drift → degrade to exactly the pre-network
             // behavior: whatever the session JSONL has. If the JSONL has
             // nothing but a previous live snapshot is still on screen, keep
@@ -148,6 +175,11 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        if let snapshot = currentSnapshot(.codex) {
+            TestDiagnosticLog.recordQuotaResult(snapshot)
+        }
+        #endif
         lastCodexFetchAt = Date()
     }
 
@@ -190,6 +222,9 @@ final class RateLimitCoordinator {
     private func performClaudeRefresh() async {
         guard let appState, appState.claudeRateLimitEnabled else { return }
         debugLog("[rate-limit] refreshClaude() entered")
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaRefreshStarted([.claudeCode])
+        #endif
 
         // Instant paint from disk, for the same reason Codex does it: the live
         // reading costs a ~2.5s subprocess round trip, and an empty card for
@@ -207,8 +242,14 @@ final class RateLimitCoordinator {
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             upsert(live)
         } catch is CancellationError {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaCancelled([.claudeCode])
+            #endif
             return
         } catch {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaFailure([.claudeCode], error: error)
+            #endif
             let failure = Self.classify(error)
             guard !Task.isCancelled, appState.claudeRateLimitEnabled else { return }
             if failure == .notApplicable {
@@ -230,6 +271,11 @@ final class RateLimitCoordinator {
             }
         }
         guard !Task.isCancelled else { return }
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        if let snapshot = currentSnapshot(.claudeCode) {
+            TestDiagnosticLog.recordQuotaResult(snapshot)
+        }
+        #endif
         lastClaudeFetchAt = Date()
     }
 
@@ -242,26 +288,177 @@ final class RateLimitCoordinator {
         await refreshClaude()
     }
 
+    /// Fetches one versioned CLI envelope for the requested CLI-backed set.
+    /// The CLI isolates provider failures, while this boundary also guards the
+    /// current selection before starting and again before publishing results.
+    func refreshCLIProviders(_ providers: [ProviderRateLimit.Provider]) async {
+        guard let appState else { return }
+        let requested = providers.reduce(into: [ProviderRateLimit.Provider]()) { result, provider in
+            guard provider.usesQuotaCLI,
+                  appState.isQuotaProviderSelected(provider),
+                  !result.contains(provider)
+            else { return }
+            result.append(provider)
+        }
+        guard !requested.isEmpty else { return }
+
+        if let task = cliRefreshTask {
+            let alreadyCovered = activeCLIProviders
+            let cancellationGeneration = cliCancellationGeneration
+            await task.value
+            guard !Task.isCancelled, cancellationGeneration == cliCancellationGeneration else { return }
+            let remaining = requested.filter {
+                !alreadyCovered.contains($0) && appState.isQuotaProviderSelected($0)
+            }
+            if !remaining.isEmpty { await refreshCLIProviders(remaining) }
+            return
+        }
+
+        let refreshID = UUID()
+        let requestedSet = Set(requested)
+        activeCLIProviders = requestedSet
+        appState.cliQuotaRefreshingProviders.formUnion(requestedSet)
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.performCLIRefresh(requested)
+            if self.cliRefreshID == refreshID {
+                self.cliRefreshTask = nil
+                self.cliRefreshID = nil
+                self.activeCLIProviders = []
+                self.appState?.cliQuotaRefreshingProviders.subtract(requestedSet)
+            }
+        }
+        cliRefreshID = refreshID
+        cliRefreshTask = task
+        await task.value
+    }
+
+    private func performCLIRefresh(_ providers: [ProviderRateLimit.Provider]) async {
+        guard let appState else { return }
+        // Keep the exact regional credential context that started this request.
+        // A Key/region change invalidates only ZCode; unrelated products from a
+        // shared CLI response remain usable.
+        let requestsZCode = providers.contains(.zCode)
+        let requestedZCodeKey = requestsZCode
+            ? appState.zCodeAPIKeyForQuotaFetch()
+            : nil
+        let requestedZCodeRegion = appState.zCodeQuotaRegion
+        #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+        TestDiagnosticLog.recordQuotaRefreshStarted(providers)
+        #endif
+        do {
+            let snapshots = try await fetchCLIQuotas(
+                providers,
+                requestedZCodeKey,
+                requestedZCodeRegion
+            )
+            guard !Task.isCancelled else { return }
+            let zCodeContextIsCurrent = !requestsZCode || (
+                requestedZCodeKey == appState.zCodeAPIKeyForQuotaFetch()
+                    && requestedZCodeRegion == appState.zCodeQuotaRegion
+            )
+            for provider in providers where appState.isQuotaProviderSelected(provider)
+                && (provider != .zCode || zCodeContextIsCurrent) {
+                if let snapshot = snapshots.first(where: { $0.provider == provider }) {
+                    if snapshot.status == .ok {
+                        _ = upsertIfNewer(snapshot)
+                    } else if snapshot.status != .retryableError
+                                || currentSnapshot(provider)?.status != .ok {
+                        upsert(snapshot)
+                    }
+                    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+                    TestDiagnosticLog.recordQuotaResult(snapshot)
+                    #endif
+                } else {
+                    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+                    TestDiagnosticLog.recordMissingQuotaResult(provider)
+                    #endif
+                    if currentSnapshot(provider)?.status != .ok {
+                        upsert(ProviderRateLimit(
+                            provider: provider,
+                            status: .retryableError,
+                            fetchedAt: Date()
+                        ))
+                    }
+                }
+                lastCLIFetchAt[provider] = Date()
+            }
+        } catch is CancellationError {
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaCancelled(providers)
+            #endif
+            return
+        } catch {
+            debugLog("[rate-limit] quota CLI failed: \(error)")
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            TestDiagnosticLog.recordQuotaFailure(providers, error: error)
+            #endif
+            guard !Task.isCancelled else { return }
+            let zCodeContextIsCurrent = !requestsZCode || (
+                requestedZCodeKey == appState.zCodeAPIKeyForQuotaFetch()
+                    && requestedZCodeRegion == appState.zCodeQuotaRegion
+            )
+            for provider in providers where appState.isQuotaProviderSelected(provider)
+                && (provider != .zCode || zCodeContextIsCurrent) {
+                if currentSnapshot(provider)?.status != .ok {
+                    upsert(ProviderRateLimit(
+                        provider: provider,
+                        status: .retryableError,
+                        fetchedAt: Date()
+                    ))
+                }
+                lastCLIFetchAt[provider] = Date()
+            }
+        }
+    }
+
+    func refreshCLIProvidersIfNeeded(
+        _ providers: [ProviderRateLimit.Provider],
+        maxAge: TimeInterval = 60
+    ) async {
+        let stale = providers.filter { provider in
+            guard let last = lastCLIFetchAt[provider] else { return true }
+            return Date().timeIntervalSince(last) >= maxAge
+        }
+        await refreshCLIProviders(stale)
+    }
+
     /// Refresh everything currently visible, in parallel — the Codex leg now
     /// includes a network round-trip, so serializing would double the wait.
     func refreshAll() async {
         async let codex: Void = refreshCodex()
         async let claude: Void = refreshClaude()
-        _ = await (codex, claude)
+        async let cli: Void = refreshCLIProviders(
+            appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
+        )
+        _ = await (codex, claude, cli)
+    }
+
+    /// Popover-open refresh for the selected products only. Keeping the fan-out
+    /// here ensures an unselected provider never performs network or subprocess
+    /// work even as the product catalog grows.
+    func refreshSelectedIfNeeded() async {
+        async let codex: Void = refreshCodexIfNeeded()
+        async let claude: Void = refreshClaudeIfNeeded()
+        async let cli: Void = refreshCLIProvidersIfNeeded(
+            appState?.selectedQuotaProviders.filter(\.usesQuotaCLI) ?? []
+        )
+        _ = await (codex, claude, cli)
     }
 
     /// Ensure every enabled provider has a placeholder entry so the card row
     /// renders its loading state on a cold open instead of appearing empty.
     func seedPlaceholders() {
-        for provider in [ProviderRateLimit.Provider.codex, .claudeCode] {
-            let enabled = provider == .codex
-                ? appState?.codexRateLimitEnabled == true
-                : appState?.claudeRateLimitEnabled == true
-            guard enabled,
-                  appState?.rateLimits.contains(where: { $0.provider == provider }) != true
-            else { continue }
-            upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
+        for provider in appState?.selectedQuotaProviders ?? [] {
+            seedPlaceholder(for: provider)
         }
+    }
+
+    func seedPlaceholder(for provider: ProviderRateLimit.Provider) {
+        guard appState?.isQuotaProviderSelected(provider) == true,
+              appState?.rateLimits.contains(where: { $0.provider == provider }) != true
+        else { return }
+        upsert(ProviderRateLimit(provider: provider, status: .noData, fetchedAt: nil))
     }
 
     // MARK: - Panel lifecycle
@@ -277,6 +474,7 @@ final class RateLimitCoordinator {
         if !visible {
             cancelCodexRefresh()
             cancelClaudeRefresh()
+            cancelCLIRefresh()
         }
     }
 
@@ -304,6 +502,37 @@ final class RateLimitCoordinator {
         claudeRefreshTask = nil
         claudeRefreshID = nil
         appState?.isClaudeRateLimitRefreshing = false
+    }
+
+    func cancelRefresh(for provider: ProviderRateLimit.Provider) {
+        switch provider {
+        case .codex:
+            cancelCodexRefresh()
+        case .claudeCode:
+            cancelClaudeRefresh()
+        case .kimiCode, .zCode, .grok:
+            cancelCLIRefresh()
+        case .cursor: break
+        }
+    }
+
+    /// ZCode's Key and region are part of its cache/request identity. Drop its
+    /// debounce timestamp and cancel a shared CLI request only when that
+    /// request actually includes ZCode.
+    func zCodeCredentialContextDidChange() {
+        lastCLIFetchAt[.zCode] = nil
+        if activeCLIProviders.contains(.zCode) {
+            cancelCLIRefresh()
+        }
+    }
+
+    func cancelCLIRefresh() {
+        cliCancellationGeneration &+= 1
+        cliRefreshTask?.cancel()
+        cliRefreshTask = nil
+        cliRefreshID = nil
+        activeCLIProviders = []
+        appState?.cliQuotaRefreshingProviders = []
     }
 
     private nonisolated static func readCodexSessionFiles() async -> ProviderRateLimit {

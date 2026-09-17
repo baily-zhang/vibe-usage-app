@@ -24,6 +24,15 @@ struct RateLimitWindow: Equatable {
     var windowDuration: TimeInterval?
 }
 
+/// A provider-neutral quota meter. New providers are not required to expose
+/// Codex's exact 5h/7d shape; the desktop can render the first two important
+/// meters and summarize the remainder without changing its card layout.
+struct RateLimitMeter: Equatable, Identifiable {
+    var id: String
+    var label: String
+    var window: RateLimitWindow
+}
+
 /// Pay-as-you-go credits beyond the base subscription quota (Claude only).
 struct ExtraUsage: Equatable {
     var isEnabled: Bool
@@ -34,9 +43,24 @@ struct ExtraUsage: Equatable {
 /// Aggregate rate-limit snapshot for one provider. All sub-windows are optional —
 /// a provider may report fewer windows depending on plan tier or configuration.
 struct ProviderRateLimit: Equatable, Identifiable {
-    enum Provider: String {
-        case codex = "Codex"
-        case claudeCode = "Claude Code"
+    enum Provider: String, CaseIterable, Codable {
+        case codex = "codex"
+        case claudeCode = "claude-code"
+        case kimiCode = "kimi-code"
+        case zCode = "zcode"
+        case grok = "grok"
+        case cursor = "cursor"
+
+        var displayName: String {
+            switch self {
+            case .codex: return "Codex"
+            case .claudeCode: return "Claude"
+            case .kimiCode: return "Kimi Code"
+            case .zCode: return "ZCode"
+            case .grok: return "Grok"
+            case .cursor: return "Cursor"
+            }
+        }
     }
 
     enum Status: Equatable {
@@ -50,6 +74,10 @@ struct ProviderRateLimit: Equatable, Identifiable {
 
     var id: String { provider.rawValue }
     var provider: Provider
+    /// Preferred provider-neutral representation. Existing native Codex and
+    /// Claude readers continue filling their typed fields below; CLI-backed
+    /// providers can populate this collection directly.
+    var meters: [RateLimitMeter] = []
     var fiveHour: RateLimitWindow?
     var sevenDay: RateLimitWindow?
     var sevenDayOpus: RateLimitWindow?     // Claude Max plan only

@@ -54,7 +54,12 @@ enum CLIBridge {
     // MARK: - Private
 
     @discardableResult
-    private static func runCLI(args: [String], timeout: TimeInterval = 30) async throws -> String {
+    static func runCLI(
+        args: [String],
+        timeout: TimeInterval = 30,
+        environmentOverrides: [String: String] = [:],
+        environmentKeysToRemove: Set<String> = []
+    ) async throws -> String {
         guard let runtime = RuntimeDetector.detect() else { throw CLIError.noRuntime }
         var env = ProcessInfo.processInfo.environment
         let runtimeDir = (runtime.executablePath as NSString).deletingLastPathComponent
@@ -63,6 +68,10 @@ enum CLIBridge {
         #if DEBUG
         env["VIBE_USAGE_DEV"] = "1"
         #endif
+        // Per-call credential injection (quota fetches): drop the other
+        // regions' keys first so a stale key can never leak into a request.
+        environmentKeysToRemove.forEach { env.removeValue(forKey: $0) }
+        env.merge(environmentOverrides) { _, overrideValue in overrideValue }
         let output = try await CLIProcessRunner.run(
             executable: runtime.executablePath,
             arguments: RuntimeDetector.arguments(runtimeName: runtime.name, command: args),
