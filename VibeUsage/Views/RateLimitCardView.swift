@@ -714,7 +714,10 @@ private struct ProviderIcon: View {
         switch provider {
         case .codex:      resource = "codex-icon"
         case .claudeCode: resource = "claude-icon"
-        case .kimiCode, .zCode, .grok, .cursor: return nil
+        case .kimiCode:   resource = "kimi-icon"
+        case .zCode:      resource = "zcode-icon"
+        case .grok:       resource = "grok-icon"
+        case .cursor:     resource = "cursor-icon"
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
             ?? Bundle.appResources.url(forResource: resource, withExtension: "svg")
