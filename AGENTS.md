@@ -81,10 +81,22 @@ This remains true during a broad issue sweep.
 
 The Mac app is a consumer of the backend + CLI contract. It must not introduce
 an app-local setting that overrides backend-owned Usage policy, reinterpret
-shared `~/.vibe-usage/config.json` fields as a new control plane, or silently
-change CLI behavior through `@latest`. Before approval, present the current and
-proposed invariants, all affected repositories, existing-user migration,
-release ordering, and rollback. Signed/notarized release creation happens only
+shared `~/.vibe-usage/config.json` fields as a new control plane, or pin the CLI
+to an exact version.
+
+**CLI version policy (decided 2026-09-17):** the app always invokes
+`@vibe-cafe/vibe-usage@latest` (`RuntimeDetector.defaultPackageSpecifier`) and
+never freezes an exact version — a pin silently rots (e.g. a pinned build that
+predates the feature the app calls) and it costs users every CLI fix until the
+next app release. Compatibility is a *protocol* problem, not a version-number
+problem: every structured CLI reply the app depends on carries a protocol
+version (e.g. `QuotaCLIBridge.schemaVersion`), an unknown version or a missing
+command must surface an actionable "update the CLI" message instead of an empty
+card, and the app must keep working against CLI releases newer than itself.
+`VIBE_USAGE_CLI_PACKAGE` stays the only way to point the app at an unreleased
+build (integration tests). Before approval, present the current and proposed
+invariants, all affected repositories, existing-user migration, release
+ordering, and rollback. Signed/notarized release creation happens only
 after that design approval; passing tests and possessing release credentials
 are not approval.
 
