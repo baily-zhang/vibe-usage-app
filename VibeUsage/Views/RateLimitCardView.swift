@@ -690,7 +690,10 @@ private struct ProgressBar: View {
 
 // MARK: - Provider icon
 
-private struct ProviderIcon: View {
+/// Official provider artwork (28/56 px assets in the app resource bundle) with
+/// a symbol fallback. Shared by the quota cards' headers and the Settings
+/// product rows, so both surfaces resolve the same asset the same way.
+struct ProviderIcon: View {
     let provider: ProviderRateLimit.Provider
 
     var body: some View {

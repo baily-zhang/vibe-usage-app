@@ -23,7 +23,7 @@ vibe-usage-app/                    # SwiftUI macOS menu bar app (SPM, Swift 6, m
 │   │   ├── BarChartView.swift     # Custom-drawn bar chart (hourly/daily trend)
 │   │   ├── DistributionChartsView.swift  # 4 donut pie charts (terminal, tool, model, project)
 │   │   ├── FilterTagsView.swift   # Filter pills for source/model/project/hostname
-│   │   └── SettingsView.swift     # Settings form (re-link, extra Codex Home, isolated runtime roots, menu bar prefs, auto-start, updates)
+│   │   ├── SettingsView.swift     # Grouped settings form: 订阅配额 toggles, 常规 (menu bar/Dock/auto-start), 数据同步, 数据目录（高级）collapsed disclosures, updates, reset
 │   ├── Services/
 │   │   ├── APIClient.swift        # HTTP client for /api/usage (Bearer auth with vbu_ key) + unauthenticated device-flow helpers (requestDeviceCode/pollDeviceCode)
 │   │   ├── SyncEngine.swift       # Orchestrates CLI sync (runs @vibe-cafe/vibe-usage via Node/Bun)
@@ -175,7 +175,7 @@ Release builds always run `@latest` (CLI version policy above): the app must wor
 3. `RuntimeDetector` finds Node.js or Bun on the system
 4. After sync completes, `fetchUsageData()` refreshes the dashboard
 5. Opening the popover calls `fetchUsageDataIfNeeded()` (60s debounce) — fetch only, no upload
-6. Settings can persist one legacy `codexExtraHome` plus per-source isolated runtime roots (Codex / Grok / Antigravity, e.g. Multica homes) through the CLI (`config roots` / `add-root` / `remove-root`, CLI ≥ 0.10.20); sync then scans them together with each tool's default directory (`$CODEX_HOME` / `~/.codex` for Codex). The app never writes these fields itself — `CLIBridge` shells out so the CLI stays the single writer. Config writes must preserve unknown CLI fields, especially local privacy controls and `deviceId`. `VIBE_USAGE_CONFIG_DIR` / `VIBE_USAGE_CLI_PACKAGE` are integration-test hooks (the latter forces `npx` with a local package path).
+6. Settings can persist one legacy `codexExtraHome` plus per-source isolated runtime roots (Codex / Grok / Antigravity, e.g. Multica homes) through the CLI (`config roots` / `add-root` / `remove-root`, CLI ≥ 0.10.20) — both editors sit in the collapsed 数据目录（高级）group; sync then scans them together with each tool's default directory (`$CODEX_HOME` / `~/.codex` for Codex). The app never writes these fields itself — `CLIBridge` shells out so the CLI stays the single writer. Config writes must preserve unknown CLI fields, especially local privacy controls and `deviceId`. `VIBE_USAGE_CONFIG_DIR` / `VIBE_USAGE_CLI_PACKAGE` are integration-test hooks (the latter forces `npx` with a local package path).
 
 CLI subprocesses use `CLIProcessRunner`: blocking waits run on a dispatch worker, stdout/stderr go to private temporary files (removed after completion), and deadlines are reported as timeout rather than launcher stderr. Never wait for a subprocess to exit before draining `Pipe` output: a full pipe deadlocks the child, and an inherited pipe can outlive it. A one-second SIGTERM grace period is followed by SIGKILL for an unresponsive process. Exit zero remains success even when Bun prints dependency-resolution progress to stderr.
 
@@ -201,6 +201,10 @@ No background timer. `RateLimitCoordinator` is driven entirely by user-visible e
 
 ### Settings Window
 Settings uses a raw `NSWindow` via `SettingsWindowController`. The SwiftUI `Settings` scene stays as a placeholder to satisfy the `App` protocol; the actual settings surface is managed directly so it behaves consistently alongside the custom dashboard panel.
+
+The page is grouped by subject: 数据同步 (account key + sync health) → 订阅配额 (product toggles) → 常规 (menu bar display, auto-start, Dock) → 数据目录（高级）→ [测试诊断, test builds only] → 关于 → 危险操作. Low-frequency and advanced controls live in *collapsed* groups instead of separate sections: the provider notes plus the manual re-detection button inside 订阅配额 (「数据来源与检测」), and both extra-scan-directory editors inside 数据目录（高级）(「额外 Codex Home」/「隔离运行时目录」, whose collapsed labels still surface state as the path or 「N 个目录」). ZCode is the one product row that opens a form: it sits last in the product list, collapsed to an ordinary row (chevron + icon + name + switch), and its expanded form holds only the region picker, the key field and one save/remove action — a user who does not use ZCode never reads about it. Product rows and quota cards share `ProviderIcon` at 14pt, so the two surfaces cannot drift. Collapsing is presentation only — no control was removed, and every row the page exposed before is still one click away.
+
+**Settings copy stays terse.** A label is the shortest direct word (「区域」, 「保存」, 「移除」), and an explanation belongs behind the control it explains or nowhere at all. The judge is whether a first-time user can act without reading prose: the page had grown to ~3.4 screens of stacked sections and multi-sentence footers before this rule, and every added paragraph re-creates that. Add a new setting to an existing group (or behind a collapsed one) rather than appending another section; sync health and 「上次同步」 deliberately share one row for the same reason.
 
 ### ActivationCoordinator
 `ActivationCoordinator` follows the persisted `showInDock` preference: `.regular` with the bundled Dock icon when visible in Dock/Cmd-Tab, `.accessory` when hidden. Settings temporarily promotes the app to `.regular` so it keeps a main menu and Cmd-Tab entry while the Settings window is open. It remains the single place that reconciles activation policy, which prevents future popup/settings transitions from fighting each other.

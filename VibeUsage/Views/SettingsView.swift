@@ -23,6 +23,10 @@ struct SettingsView: View {
     @State private var isSavingZCodeAPIKey = false
     @State private var zCodeAPIKeyMessage: String?
     @State private var zCodeAPIKeyError: String?
+    @State private var isQuotaSourcesExpanded = false
+    @State private var isCodexHomeExpanded = false
+    @State private var isIsolatedRootsExpanded = false
+    @State private var isZCodeExpanded = false
     #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
     @State private var diagnosticExportMessage: String?
     #endif
@@ -35,44 +39,295 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            // Sync section
-            Section {
-                LabeledContent("API Key") {
-                    VStack(alignment: .trailing, spacing: 6) {
-                        HStack(spacing: 8) {
-                            Text(apiKeyDisplay)
-                                .font(.system(.body, design: .monospaced))
-                                .foregroundStyle(Color(white: 0.5))
+            syncSection
+            quotaSection
+            generalSection
+            dataDirectorySection
 
-                            Button(isRelinking ? "等待确认…" : "重新链接") {
-                                relinkTask = Task { await relink() }
-                            }
-                            .font(.caption)
-                            .disabled(isRelinking)
+            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+            diagnosticsSection
+            #endif
 
-                            if isRelinking {
-                                Button("取消") {
-                                    cancelRelink()
-                                }
+            aboutSection
+            resetSection
+        }
+        .formStyle(.grouped)
+        .frame(width: 420, height: 460)
+        .onAppear {
+            loadSettings()
+            Task { await loadExtraRoots() }
+        }
+    }
+
+    // MARK: - Sections
+
+    /// The subscriptions the panel tracks. Every product is a plain switch, so
+    /// the section stays flat; only ZCode (the one product that needs a key)
+    /// owns a row that opens, and it sits last.
+    private var quotaSection: some View {
+        Section {
+            ForEach(appState.quotaProducts.filter { $0.provider != .zCode }) { product in
+                Toggle(isOn: quotaSelectionBinding(product.provider)) {
+                    HStack(alignment: .top, spacing: 8) {
+                        ProviderIcon(provider: product.provider)
+                            .frame(width: 14, height: 14)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(product.displayName)
+                            Text(appState.quotaProductStatusText(product))
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            if product.provider == .claudeCode,
+                               appState.claudeUsesDesktopBundledCLI {
+                                Text("数据来源：Claude Desktop")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                        }
-                        if let relinkUserCode {
-                            Text("验证码: \(relinkUserCode)")
-                                .font(.system(.caption, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                        }
-                        if let relinkError {
-                            Text(relinkError)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                                .lineLimit(2)
                         }
                     }
                 }
+                .tint(.green)
+                .disabled(quotaToggleDisabled(product.provider))
+            }
 
-                LabeledContent("状态") {
+            if let zCodeProduct {
+                zCodeRow(zCodeProduct)
+            }
+
+            DisclosureGroup(isExpanded: $isQuotaSourcesExpanded) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。")
+                    Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
+                    Text("Kimi Code 使用其官方 CLI 登录。")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.vertical, 4)
+
+                Button("重新检测本机产品") {
+                    appState.rediscoverQuotaProducts()
+                }
+            } label: {
+                Text("数据来源与检测")
+            }
+        } header: {
+            Text("订阅配额（\(appState.selectedQuotaProviders.count)）")
+        } footer: {
+            Text("选中的产品会在面板中各显示一张卡片。")
+                .font(.caption)
+        }
+    }
+
+    /// The panel's other cards follow the selection order; the Settings list
+    /// keeps ZCode last because it is the only product whose row opens a form.
+    private var zCodeProduct: QuotaProduct? {
+        appState.quotaProducts.first(where: { $0.provider == .zCode })
+    }
+
+    /// Collapsed, ZCode is an ordinary product row (chevron + icon + name +
+    /// switch). Its key form only exists once the row is opened, so the row
+    /// itself never explains a product the user may not use.
+    ///
+    /// The status line stays `quotaProductStatusText` (the single source of
+    /// truth — the panel's selector tooltip prints its full form), shortened
+    /// here to the one fact the row can act on. Wording this map does not
+    /// recognize passes through untouched instead of being invented.
+    static func compactQuotaStatus(_ status: String) -> String {
+        if status.contains("已配置") { return "已配置" }
+        if status.contains("需配置") || status.contains("未检测到") { return "待配置" }
+        return status
+    }
+
+    private func zCodeRow(_ product: QuotaProduct) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.12)) {
+                        isZCodeExpanded.toggle()
+                    }
+                } label: {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                            .rotationEffect(.degrees(isZCodeExpanded ? 90 : 0))
+                        ProviderIcon(provider: .zCode)
+                            .frame(width: 14, height: 14)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(product.displayName)
+                            Text(Self.compactQuotaStatus(appState.quotaProductStatusText(product)))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Toggle("", isOn: quotaSelectionBinding(.zCode))
+                    .labelsHidden()
+                    .tint(.green)
+                    .disabled(quotaToggleDisabled(.zCode))
+            }
+
+            if isZCodeExpanded {
+                zCodeConfig
+            }
+        }
+    }
+
+    private var zCodeConfig: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Picker("区域", selection: Binding(
+                get: { appState.zCodeQuotaRegion },
+                set: { region in
+                    zCodeAPIKey = ""
+                    zCodeAPIKeyMessage = nil
+                    zCodeAPIKeyError = nil
+                    Task { await appState.setZCodeQuotaRegion(region) }
+                }
+            )) {
+                ForEach(ZCodeQuotaRegion.allCases) { region in
+                    Text(region.displayName).tag(region)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .disabled(isSavingZCodeAPIKey)
+
+            HStack(spacing: 8) {
+                SecureField(
+                    appState.zCodeAPIKeyConfigured ? "新 Key" : appState.zCodeQuotaRegion.apiKeyName,
+                    text: $zCodeAPIKey
+                )
+                .textFieldStyle(.roundedBorder)
+                Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
+                    Task { await saveZCodeAPIKey() }
+                }
+                .disabled(
+                    zCodeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || isSavingZCodeAPIKey
+                )
+                if appState.zCodeAPIKeyConfigured {
+                    Button("移除", role: .destructive) {
+                        Task { await removeZCodeAPIKey() }
+                    }
+                    .disabled(isSavingZCodeAPIKey)
+                }
+            }
+
+            if let zCodeAPIKeyMessage {
+                Text(zCodeAPIKeyMessage)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+            if let zCodeAPIKeyError {
+                Text(zCodeAPIKeyError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.leading, 22)
+        .padding(.bottom, 2)
+    }
+
+    /// One binding for every product switch, including ZCode's custom row.
+    private func quotaSelectionBinding(_ provider: ProviderRateLimit.Provider) -> Binding<Bool> {
+        Binding(
+            get: { appState.isQuotaProviderSelected(provider) },
+            set: { newValue in
+                Task {
+                    await appState.setQuotaProductSelected(provider, selected: newValue)
+                }
+            }
+        )
+    }
+
+    /// Turning a product off is always allowed; turning one on is accepted for
+    /// every catalog product, so a switch only locks for an unknown provider.
+    private func quotaToggleDisabled(_ provider: ProviderRateLimit.Provider) -> Bool {
+        !appState.isQuotaProviderSelected(provider)
+            && !appState.canSelectQuotaProvider(provider)
+    }
+
+    /// Menu-bar and startup preferences cover the same subject — how the app
+    /// behaves outside this window — so they share one section instead of two
+    /// near-identical ones.
+    private var generalSection: some View {
+        Section {
+            Toggle("菜单栏显示费用", isOn: Binding(
+                get: { appState.showCostInMenuBar },
+                set: { appState.showCostInMenuBar = $0 }
+            ))
+            .tint(.green)
+            Toggle("菜单栏显示 Token", isOn: Binding(
+                get: { appState.showTokensInMenuBar },
+                set: { appState.showTokensInMenuBar = $0 }
+            ))
+            .tint(.green)
+
+            Toggle("开机自启动", isOn: $autoStartEnabled)
+                .tint(.green)
+                .onChange(of: autoStartEnabled) { _, newValue in
+                    setAutoStart(newValue)
+                }
+
+            Toggle("在 Dock 中显示", isOn: Binding(
+                get: { appState.showInDock },
+                set: { appState.showInDock = $0 }
+            ))
+            .tint(.green)
+        } header: {
+            Text("常规")
+        } footer: {
+            Text("Dock 显示在关闭设置窗口后生效。")
+                .font(.caption)
+        }
+    }
+
+    /// Account key plus sync health. The former standalone 「上次同步」 row is a
+    /// trailing detail of the status, so it rides along as a caption instead of
+    /// costing a full row.
+    private var syncSection: some View {
+        Section {
+            LabeledContent("API Key") {
+                VStack(alignment: .trailing, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(apiKeyDisplay)
+                            .font(.system(.body, design: .monospaced))
+                            .foregroundStyle(Color(white: 0.5))
+
+                        Button(isRelinking ? "等待确认…" : "重新链接") {
+                            relinkTask = Task { await relink() }
+                        }
+                        .font(.caption)
+                        .disabled(isRelinking)
+
+                        if isRelinking {
+                            Button("取消") {
+                                cancelRelink()
+                            }
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let relinkUserCode {
+                        Text("验证码: \(relinkUserCode)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    if let relinkError {
+                        Text(relinkError)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
+                }
+            }
+
+            LabeledContent("同步状态") {
+                VStack(alignment: .trailing, spacing: 2) {
                     HStack(spacing: 4) {
                         switch appState.syncStatus {
                         case .idle:
@@ -95,319 +350,219 @@ struct SettingsView: View {
                         }
                     }
                     .font(.caption)
-                }
 
-                if let lastSync = appState.lastSyncTime {
-                    LabeledContent("上次同步") {
-                        Text(Formatters.formatRelativeTime(lastSync))
+                    if let lastSync = appState.lastSyncTime {
+                        Text("上次同步 \(Formatters.formatRelativeTime(lastSync))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
-            } header: {
-                Text("同步")
+            }
+        } header: {
+            Text("数据同步")
+        }
+    }
+
+    /// Extra scan directories are a set-once concern. Both former sections
+    /// collapse into disclosure rows that still show their state, so no setting
+    /// is lost while the page stops paying a screen for it.
+    private var dataDirectorySection: some View {
+        Section {
+            DisclosureGroup(isExpanded: $isCodexHomeExpanded) {
+                codexHomeControls
+            } label: {
+                LabeledContent("额外 Codex Home") {
+                    Text(codexExtraHomeSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(codexExtraHome)
+                }
             }
 
-            Section {
-                VStack(alignment: .leading, spacing: 8) {
-                    TextField("额外 Codex Home 路径", text: $codexExtraHome)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(isSavingCodexHome)
-
-                    HStack {
-                        Button("选择文件夹…") {
-                            chooseCodexHome()
-                        }
-                        .disabled(isSavingCodexHome)
-
-                        Spacer()
-
-                        if isSavingCodexHome {
-                            ProgressView()
-                                .controlSize(.small)
-                        }
-
-                        Button("保存并同步") {
-                            Task { await saveCodexHome() }
-                        }
-                        .disabled(isSavingCodexHome)
-                    }
-
-                    if let codexHomeMessage {
-                        Text(codexHomeMessage)
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-                    if let codexHomeError {
-                        Text(codexHomeError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                            .lineLimit(3)
-                    }
+            DisclosureGroup(isExpanded: $isIsolatedRootsExpanded) {
+                isolatedRuntimeRootControls
+            } label: {
+                LabeledContent("隔离运行时目录") {
+                    Text(isolatedRootsSummary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
-            } header: {
-                Text("Codex 数据目录")
-            } footer: {
-                Text("额外扫描一个 Codex Home；默认的 ~/.codex 仍会保留。留空并保存可移除额外目录。")
-                    .font(.caption)
             }
+        } header: {
+            Text("数据目录（高级）")
+        }
+    }
 
-            Section {
-                ForEach(extraRootSources, id: \.id) { source in
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack {
-                            Text(source.name)
-                            Spacer()
-                            Button("添加目录…") {
-                                chooseExtraRoot(source: source.id, name: source.name)
-                            }
-                            .font(.caption)
-                            .disabled(editingExtraRoots)
-                        }
+    private var codexExtraHomeSummary: String {
+        let value = codexExtraHome.trimmingCharacters(in: .whitespacesAndNewlines)
+        return value.isEmpty ? "未设置" : value
+    }
 
-                        ForEach(extraRoots[source.id] ?? [], id: \.self) { path in
-                            HStack(spacing: 8) {
-                                Text(path)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-                                    .help(path)
-                                Spacer(minLength: 8)
-                                Button(role: .destructive) {
-                                    Task { await removeExtraRoot(source: source.id, path: path) }
-                                } label: {
-                                    Image(systemName: "minus.circle")
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(editingExtraRoots)
-                                .help("移除此目录")
-                            }
-                        }
-                    }
+    private var isolatedRootsSummary: String {
+        let count = extraRoots.values.reduce(0) { $0 + $1.count }
+        return count == 0 ? "未添加" : "\(count) 个目录"
+    }
+
+    private var codexHomeControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("额外 Codex Home 路径", text: $codexExtraHome)
+                .textFieldStyle(.roundedBorder)
+                .disabled(isSavingCodexHome)
+
+            HStack {
+                Button("选择文件夹…") {
+                    chooseCodexHome()
                 }
+                .disabled(isSavingCodexHome)
 
-                if editingExtraRoots {
+                Spacer()
+
+                if isSavingCodexHome {
                     ProgressView()
                         .controlSize(.small)
                 }
-                if let extraRootsError {
-                    Text(extraRootsError)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .lineLimit(3)
+
+                Button("保存并同步") {
+                    Task { await saveCodexHome() }
                 }
-            } header: {
-                Text("隔离运行时目录")
-            } footer: {
-                Text("可为每种工具添加多个 Multica 或其他隔离目录；默认目录仍会照常统计。")
-                    .font(.caption)
+                .disabled(isSavingCodexHome)
             }
 
-            // Subscription quota monitoring
-            Section {
-                ForEach(appState.quotaProducts) { product in
-                    Toggle(isOn: Binding(
-                        get: { appState.isQuotaProviderSelected(product.provider) },
-                        set: { newValue in
-                            Task {
-                                await appState.setQuotaProductSelected(
-                                    product.provider,
-                                    selected: newValue
-                                )
-                            }
-                        }
-                    )) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(product.displayName)
-                            Text(appState.quotaProductStatusText(product))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            if product.provider == .claudeCode,
-                               appState.claudeUsesDesktopBundledCLI {
-                                Text("数据来源：Claude Desktop")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    .tint(.green)
-                    .disabled(
-                        !appState.isQuotaProviderSelected(product.provider)
-                            && !appState.canSelectQuotaProvider(product.provider)
-                    )
-                }
+            if let codexHomeMessage {
+                Text(codexHomeMessage)
+                    .font(.caption)
+                    .foregroundStyle(.green)
+            }
+            if let codexHomeError {
+                Text(codexHomeError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
 
-                if appState.quotaProducts.first(where: { $0.provider == .zCode })?.isDetected == true
-                    || appState.zCodeAPIKeyConfigured {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("ZCode 使用用户明确提供的区域 API Key；不会读取 ZCode 登录凭据，也不会向另一区域试发。")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Picker("账号区域", selection: Binding(
-                            get: { appState.zCodeQuotaRegion },
-                            set: { region in
-                                zCodeAPIKey = ""
-                                zCodeAPIKeyMessage = nil
-                                zCodeAPIKeyError = nil
-                                Task { await appState.setZCodeQuotaRegion(region) }
-                            }
-                        )) {
-                            ForEach(ZCodeQuotaRegion.allCases) { region in
-                                Text(region.displayName).tag(region)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(isSavingZCodeAPIKey)
-                        HStack(spacing: 8) {
-                            SecureField(
-                                appState.zCodeAPIKeyConfigured
-                                    ? "输入新 Key 以更新"
-                                    : appState.zCodeQuotaRegion.apiKeyName,
-                                text: $zCodeAPIKey
-                            )
-                            .textFieldStyle(.roundedBorder)
-                            Button(appState.zCodeAPIKeyConfigured ? "更新" : "保存") {
-                                Task { await saveZCodeAPIKey() }
-                            }
-                            .disabled(
-                                zCodeAPIKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                    || isSavingZCodeAPIKey
-                            )
-                            if appState.zCodeAPIKeyConfigured {
-                                Button("移除", role: .destructive) {
-                                    Task { await removeZCodeAPIKey() }
-                                }
-                                .disabled(isSavingZCodeAPIKey)
-                            }
-                        }
-                        if let zCodeAPIKeyMessage {
-                            Text(zCodeAPIKeyMessage)
-                                .font(.caption)
-                                .foregroundStyle(.green)
-                        }
-                        if let zCodeAPIKeyError {
-                            Text(zCodeAPIKeyError)
-                                .font(.caption)
-                                .foregroundStyle(.red)
-                        }
-                    }
-                }
-
-                Button("重新检测本机产品") {
-                    appState.rediscoverQuotaProducts()
-                }
-            } header: {
-                Text("订阅配额（\(appState.selectedQuotaProviders.count)）")
-            } footer: {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("已选择的产品都会显示在面板中；产品较多时配额卡片横向滚动。")
-                    Text("检测状态仅用于推荐，所有产品都可手动选择；未选择的产品不会联网读取配额。")
-                    Text("Grok 仅从官方 CLI 普通日志读取结构化订阅配额；Cursor 可单独选择并等待官方配额接口，不读取 Cookie、登录 Token 或其他应用 Keychain。")
-                    Text("Kimi Code 使用其官方 CLI 登录；ZCode 支持 BigModel（国内）和 Z.ai（海外）的 Coding Plan Key。")
-                }
+            Text("额外扫描一个 Codex Home；默认的 ~/.codex 仍会保留。留空并保存可移除额外目录。")
                 .font(.caption)
-            }
-
-            // Menu bar display
-            Section {
-                Toggle("菜单栏显示费用", isOn: Binding(
-                    get: { appState.showCostInMenuBar },
-                    set: { appState.showCostInMenuBar = $0 }
-                ))
-                .tint(.green)
-                Toggle("菜单栏显示 Token", isOn: Binding(
-                    get: { appState.showTokensInMenuBar },
-                    set: { appState.showTokensInMenuBar = $0 }
-                ))
-                .tint(.green)
-            } header: {
-                Text("菜单栏")
-            } footer: {
-                Text("在菜单栏图标旁显示费用和 Token 用量")
-                    .font(.caption)
-            }
-
-            // Auto-start + general
-            Section {
-                Toggle("开机自启动", isOn: $autoStartEnabled)
-                    .tint(.green)
-                    .onChange(of: autoStartEnabled) { _, newValue in
-                        setAutoStart(newValue)
-                    }
-
-                Toggle("在 Dock 中显示", isOn: Binding(
-                    get: { appState.showInDock },
-                    set: { appState.showInDock = $0 }
-                ))
-                .tint(.green)
-            } header: {
-                Text("通用")
-            } footer: {
-                Text("关闭设置窗口后生效")
-                    .font(.caption)
-            }
-
-            #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
-            Section {
-                Button("导出诊断日志…") {
-                    exportDiagnosticLog()
-                }
-                if let diagnosticExportMessage {
-                    Text(diagnosticExportMessage)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            } header: {
-                Text("测试诊断")
-            } footer: {
-                Text("仅测试构建可用。日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
-                    .font(.caption)
-            }
-            #endif
-
-            // About & Updates
-            Section {
-                LabeledContent("版本") {
-                    Text(
-                        AppConfig.isExternalTest
-                            ? "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version) · 外测"
-                            : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
-                    )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                Button("检查更新") {
-                    updaterViewModel.checkForUpdates()
-                }
-                .disabled(!updaterViewModel.canCheckForUpdates)
-            } header: {
-                Text("关于")
-            }
-
-            // Danger zone
-            Section {
-                Button(role: .destructive) {
-                    showingResetConfirmation = true
-                } label: {
-                    Text("重置配置")
-                }
-                .confirmationDialog("确定要重置配置吗？", isPresented: $showingResetConfirmation) {
-                    Button("重置", role: .destructive) {
-                        resetConfig()
-                    }
-                    Button("取消", role: .cancel) {}
-                } message: {
-                    Text("这将清除 API Key 并停止自动同步。")
-                }
-            }
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .formStyle(.grouped)
-        .frame(width: 420, height: 460)
-        .onAppear {
-            loadSettings()
-            Task { await loadExtraRoots() }
+        .padding(.vertical, 4)
+    }
+
+    private var isolatedRuntimeRootControls: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(extraRootSources, id: \.id) { source in
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(source.name)
+                        Spacer()
+                        Button("添加目录…") {
+                            chooseExtraRoot(source: source.id, name: source.name)
+                        }
+                        .font(.caption)
+                        .disabled(editingExtraRoots)
+                    }
+
+                    ForEach(extraRoots[source.id] ?? [], id: \.self) { path in
+                        HStack(spacing: 8) {
+                            Text(path)
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                                .help(path)
+                            Spacer(minLength: 8)
+                            Button(role: .destructive) {
+                                Task { await removeExtraRoot(source: source.id, path: path) }
+                            } label: {
+                                Image(systemName: "minus.circle")
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(editingExtraRoots)
+                            .help("移除此目录")
+                        }
+                    }
+                }
+            }
+
+            if editingExtraRoots {
+                ProgressView()
+                    .controlSize(.small)
+            }
+            if let extraRootsError {
+                Text(extraRootsError)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
+            }
+
+            Text("可为每种工具添加多个 Multica 或其他隔离目录；默认目录仍会照常统计。")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var aboutSection: some View {
+        Section {
+            LabeledContent("版本") {
+                Text(
+                    AppConfig.isExternalTest
+                        ? "\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version) · 外测"
+                        : (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? AppConfig.version)
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            Button("检查更新") {
+                updaterViewModel.checkForUpdates()
+            }
+            .disabled(!updaterViewModel.canCheckForUpdates)
+        } header: {
+            Text("关于")
+        }
+    }
+
+    #if DEBUG || VIBE_USAGE_EXTERNAL_TEST
+    private var diagnosticsSection: some View {
+        Section {
+            Button("导出诊断日志…") {
+                exportDiagnosticLog()
+            }
+            if let diagnosticExportMessage {
+                Text(diagnosticExportMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("测试诊断")
+        } footer: {
+            Text("仅测试构建可用。日志保存在本机，只包含脱敏后的错误码、Provider、版本与系统信息。")
+                .font(.caption)
+        }
+    }
+    #endif
+
+    private var resetSection: some View {
+        Section {
+            Button(role: .destructive) {
+                showingResetConfirmation = true
+            } label: {
+                Text("重置配置")
+            }
+            .confirmationDialog("确定要重置配置吗？", isPresented: $showingResetConfirmation) {
+                Button("重置", role: .destructive) {
+                    resetConfig()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("这将清除 API Key 并停止自动同步。")
+            }
+        } header: {
+            Text("危险操作")
         }
     }
 
@@ -526,7 +681,7 @@ struct SettingsView: View {
         do {
             try appState.storeZCodeAPIKey(zCodeAPIKey)
             zCodeAPIKey = ""
-            zCodeAPIKeyMessage = "已安全保存到 Vibe Usage 钥匙串"
+            zCodeAPIKeyMessage = "已保存"
             if appState.isQuotaProviderSelected(.zCode) {
                 await appState.refreshRateLimit(for: .zCode)
             }
@@ -543,7 +698,7 @@ struct SettingsView: View {
         do {
             try appState.storeZCodeAPIKey(nil)
             zCodeAPIKey = ""
-            zCodeAPIKeyMessage = "已移除；ZCode 配额显示已关闭"
+            zCodeAPIKeyMessage = "已移除"
         } catch {
             zCodeAPIKeyError = error.localizedDescription
         }
