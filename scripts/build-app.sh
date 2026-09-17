@@ -224,16 +224,16 @@ arch_bin_dir() {
 
 build_host() {
     echo "==> Building release binary (host architecture)..."
-    swift build -c release "${SWIFT_BUILD_ARGS[@]}"
+    swift build -c release ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"}
 }
 
 build_arch() {
     local arch="$1"
     echo "==> Building release binary ($arch)..."
     if $SWIFT_SUPPORTS_ARCH; then
-        swift build -c release --arch "$arch" "${SWIFT_BUILD_ARGS[@]}"
+        swift build -c release --arch "$arch" ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"}
     else
-        swift build -c release --triple "${arch}-apple-macosx${MACOS_DEPLOYMENT_TARGET}" "${SWIFT_BUILD_ARGS[@]}"
+        swift build -c release --triple "${arch}-apple-macosx${MACOS_DEPLOYMENT_TARGET}" ${SWIFT_BUILD_ARGS[@]+"${SWIFT_BUILD_ARGS[@]}"}
     fi
 }
 
