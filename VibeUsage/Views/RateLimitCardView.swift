@@ -156,18 +156,17 @@ private struct ProviderCard: View {
     @Environment(AppState.self) private var appState
     let snapshot: ProviderRateLimit
 
-    /// Which window-label is currently hovered (`"5h"` / `"7d"`). Lifted to the
-    /// card level so the tooltip can render as ONE overlay on the rows VStack
-    /// instead of per-row. The content layer is raised above the freshness
-    /// footer below, so stale-data copy can never paint over the tooltip.
-    /// (See `BarChartView` for the same pattern with multi-bar tooltips.)
+    /// Which window-label is currently hovered (`"5h"` / `"7d"`). The card owns
+    /// only the *state* — the tooltip itself is drawn by the popover's topmost
+    /// layer (`QuotaTooltipPreferenceKey`), because the card sits inside the
+    /// horizontal card scroller and the dashboard's vertical `ScrollView`, and
+    /// both clip whatever leaves the card's bounds.
     @State private var hoveredLabel: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             header
             content
-                .zIndex(1)
             if snapshot.status == .ok {
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     if let note = footerNote(at: context.date) {
@@ -186,9 +185,7 @@ private struct ProviderCard: View {
         // Compose the rounded fill and the border stroke into a single
         // BACKGROUND layer. If the stroke were a separate `.overlay` it
         // would paint after (i.e. on top of) the card's content — the
-        // bottom-edge stroke would then cut through any tooltip that
-        // overflows past the card's lower border. Putting both inside
-        // `.background` keeps them entirely behind the content.
+        // bottom-edge stroke would then cut through the last row.
         .background(
             RoundedRectangle(cornerRadius: 4)
                 .fill(Color(white: 0.09))
@@ -367,33 +364,33 @@ private struct ProviderCard: View {
             ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                 rowView(row)
                     .frame(height: rowHeight)
+                    // Hand the hovered row's values *and* its own rect up to
+                    // the popover's topmost layer, which is the only place the
+                    // tooltip can be drawn whole: everything from here to the
+                    // panel edge is inside a clipping scroller. Only the
+                    // hovered row publishes, so the payload is never ambiguous.
+                    .anchorPreference(
+                        key: QuotaTooltipPreferenceKey.self,
+                        value: .bounds
+                    ) { anchor in
+                        guard row.hoverLabel == hoveredLabel,
+                              let win = row.liveWindow
+                        else { return nil }
+                        return QuotaTooltipPayload(
+                            key: "\(snapshot.provider.rawValue)-\(row.hoverLabel)",
+                            title: tooltipTitle(for: row.hoverLabel),
+                            tokenPercentText: win.percentText,
+                            tokenColor: ProgressBar.color(for: win.utilization),
+                            elapsedPercentText: win.elapsedPercentText,
+                            remainingText: win.remainingText,
+                            anchor: anchor
+                        )
+                    }
             }
             if rows.isEmpty {
                 Text("暂无订阅配额数据")
                     .font(.system(size: 11))
                     .foregroundStyle(Color(white: 0.45))
-            }
-        }
-        // The tooltip overlay attached HERE — at the rows VStack — paints
-        // above all child rows as a natural property of how SwiftUI composes
-        // overlays (overlay always renders after its underlying content).
-        // ProviderCard raises this whole content layer above its later footer
-        // sibling so 「数据截至」 cannot bleed through the tooltip.
-        .overlay(alignment: .topLeading) {
-            if let hovered = hoveredLabel,
-               let idx = rows.firstIndex(where: { $0.hoverLabel == hovered }),
-               let win = rows[idx].liveWindow {
-                TooltipView(
-                    title: tooltipTitle(for: hovered),
-                    tokenPercentText: win.percentText,
-                    tokenColor: ProgressBar.color(for: win.utilization),
-                    elapsedPercentText: win.elapsedPercentText,
-                    remainingText: win.remainingText
-                )
-                .fixedSize()
-                .offset(y: tooltipOffsetY(rowIndex: idx))
-                .allowsHitTesting(false)
-                .transition(.opacity)
             }
         }
         .animation(.easeOut(duration: 0.12), value: hoveredLabel)
@@ -414,14 +411,6 @@ private struct ProviderCard: View {
     // Fixed row metrics so the tooltip can be positioned deterministically.
     private var rowHeight: CGFloat { 16 }
     private var rowSpacing: CGFloat { 6 }
-
-    /// Y-offset where the tooltip's top-leading corner should sit, measured
-    /// from the rows-VStack top. Places the tooltip 6pt below the bottom
-    /// edge of the hovered row.
-    private func tooltipOffsetY(rowIndex: Int) -> CGFloat {
-        let bottomOfRow = CGFloat(rowIndex + 1) * rowHeight + CGFloat(rowIndex) * rowSpacing
-        return bottomOfRow + 6
-    }
 
     private func tooltipTitle(for label: String) -> String {
         switch label {
@@ -580,6 +569,135 @@ private struct EmptyQuotaRow: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+}
+
+// MARK: - Tooltip layer
+
+/// Everything the quota tooltip needs in order to draw itself, carried from the
+/// hovered row up to the panel root: the formatted values plus an anchor for the
+/// row's rect.
+///
+/// The tooltip is taller than the card and straddles the card's bottom edge, so
+/// nothing between the row and the panel edge can draw it whole — the horizontal
+/// card scroller and the dashboard's vertical `ScrollView` both clip their
+/// content, and every section below the quota row paints after it. Routing the
+/// payload up as a preference lets `PopoverView`'s root overlay (above every
+/// scroller, card, and sibling in the panel) draw it instead.
+struct QuotaTooltipPayload {
+    /// Hovered-row identity, so a move between rows animates instead of
+    /// snapping.
+    let key: String
+    let title: String
+    let tokenPercentText: String
+    let tokenColor: Color
+    let elapsedPercentText: String?
+    let remainingText: String?
+    /// The hovered row's rect, resolved by the layer that draws the tooltip.
+    let anchor: Anchor<CGRect>
+}
+
+/// Carries the hovered row's payload to the panel root. Only the hovered row
+/// publishes one, so `reduce` keeps the single payload that matters.
+struct QuotaTooltipPreferenceKey: PreferenceKey {
+    static var defaultValue: QuotaTooltipPayload? { nil }
+
+    static func reduce(
+        value: inout QuotaTooltipPayload?,
+        nextValue: () -> QuotaTooltipPayload?
+    ) {
+        value = value ?? nextValue()
+    }
+}
+
+/// Where a tooltip of a known size goes, relative to the row that opened it.
+/// Plain arithmetic (like `MenuBarPanelGeometry`) so the panel-edge rules are
+/// testable without rendering: hang below the row while the tooltip fits
+/// there, flip above it when it does not, and never let either axis leave the
+/// panel.
+enum QuotaTooltipPlacement {
+    /// Distance between the hovered row and the tooltip.
+    static let gap: CGFloat = 6
+    /// Smallest distance the tooltip keeps from the panel's edges.
+    static let edgeInset: CGFloat = 8
+
+    static func origin(
+        rowRect: CGRect,
+        tooltipSize: CGSize,
+        containerSize: CGSize
+    ) -> CGPoint {
+        let maxX = max(edgeInset, containerSize.width - tooltipSize.width - edgeInset)
+        let x = min(max(rowRect.minX, edgeInset), maxX)
+
+        let below = rowRect.maxY + gap
+        let above = rowRect.minY - gap - tooltipSize.height
+        let fitsBelow = below + tooltipSize.height + edgeInset <= containerSize.height
+        let maxY = max(edgeInset, containerSize.height - tooltipSize.height - edgeInset)
+        let y = min(max(fitsBelow ? below : above, edgeInset), maxY)
+
+        return CGPoint(x: x, y: y)
+    }
+}
+
+/// Places the tooltip at `QuotaTooltipPlacement.origin`. A `Layout` measures the
+/// real tooltip size before placing it, so the flip rule needs no guessed height
+/// and no second layout pass.
+private struct QuotaTooltipLayout: Layout {
+    let rowRect: CGRect
+    let containerSize: CGSize
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Void
+    ) -> CGSize {
+        // The layout *is* the panel-wide layer; the tooltip is placed inside it.
+        containerSize
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout Void
+    ) {
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            let origin = QuotaTooltipPlacement.origin(
+                rowRect: rowRect,
+                tooltipSize: size,
+                containerSize: bounds.size
+            )
+            subview.place(
+                at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(size)
+            )
+        }
+    }
+}
+
+/// The tooltip, drawn by the panel root for whichever row is hovered. Content is
+/// exactly the rows it always had; only the layer it renders in changed.
+struct QuotaTooltipOverlay: View {
+    let payload: QuotaTooltipPayload
+    let rowRect: CGRect
+    let containerSize: CGSize
+
+    var body: some View {
+        QuotaTooltipLayout(rowRect: rowRect, containerSize: containerSize) {
+            TooltipView(
+                title: payload.title,
+                tokenPercentText: payload.tokenPercentText,
+                tokenColor: payload.tokenColor,
+                elapsedPercentText: payload.elapsedPercentText,
+                remainingText: payload.remainingText
+            )
+            .fixedSize()
+        }
+        // Decorative only: the pointer must keep driving the row's hover and the
+        // scrollers underneath.
+        .allowsHitTesting(false)
     }
 }
 

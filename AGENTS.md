@@ -165,6 +165,22 @@ chart subtree stays static mid-gesture. Without this the popover `ScrollView`
 stutters / sticks whenever the pointer is parked over the 趋势 chart, because
 SwiftUI keeps delivering hover updates as the content slides under the cursor.
 
+### Quota Tooltip Layer
+The 订阅配额 card tooltip (Token / 时间 / 重置 breakdown) is **not** drawn by the
+card. The card publishes the hovered row — formatted values plus an
+`anchorPreference` on the row — as `QuotaTooltipPreferenceKey`, and
+`PopoverView`'s root overlay renders it through `QuotaTooltipOverlay`
+(`VibeUsage/Views/RateLimitCardView.swift`). The card is inside the horizontal
+card scroller *and* the dashboard's vertical `ScrollView`, both of which clip
+their content, so a card-local tooltip was cut off at the card's bottom edge;
+the panel root is the one layer above every scroller, card, and following
+section. `QuotaTooltipPlacement` then positions the tooltip against the
+resolved row rect and the measured tooltip size: below the row normally, above
+it when the panel's bottom is too close, clamped to `edgeInset` when either
+axis would leave the panel (row scrolled past a panel edge). Keep new hover
+surfaces that overflow their container on this pattern rather than fighting the
+clip with padding or `zIndex`.
+
 ### Sync Pipeline
 Release builds always run `@latest` (CLI version policy above): the app must work against any published CLI, and compatibility is proven by the versioned contracts it consumes — `scripts/check-cli.mjs` runs that proof against the package the app will actually fetch. The explicit external-test build is the only path that bundles a specific CLI checkout; that bundle is validated with `--from-local` and never ships as the general release. `VIBE_USAGE_CLI_PACKAGE` remains the pre-publish local integration-test override.
 

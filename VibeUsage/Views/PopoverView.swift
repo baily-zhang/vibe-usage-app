@@ -28,6 +28,24 @@ struct PopoverView: View {
         }
         .frame(width: 520)
         .background(Color(white: 0.04))
+        // The quota tooltip is drawn here — the panel's topmost layer — because
+        // the card that opens it sits inside the horizontal card scroller and
+        // this popover's vertical `ScrollView`, both of which clip their
+        // content. As a root overlay the tooltip is above every scroller, card
+        // and following section, so nothing can crop or paint over it.
+        .overlayPreferenceValue(QuotaTooltipPreferenceKey.self) { payload in
+            GeometryReader { geo in
+                if let payload {
+                    QuotaTooltipOverlay(
+                        payload: payload,
+                        rowRect: geo[payload.anchor],
+                        containerSize: geo.size
+                    )
+                    .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: payload?.key)
+        }
     }
 
     // MARK: - Unconfigured State
@@ -275,10 +293,9 @@ struct PopoverView: View {
     private var rateLimitSection: some View {
         // Always keep the section visible: an intentionally empty selection
         // must still expose the selector so the user can add a product again.
-        // zIndex must beat FilterTagsView's (10) because quota tooltips can
-        // overflow below the cards.
+        // No zIndex is needed for the quota tooltip — it renders in the
+        // popover-root overlay, above every section here.
         RateLimitCardView()
-            .zIndex(20)
         Divider()
             .background(Color(white: 0.16))
             .padding(.vertical, 2)
