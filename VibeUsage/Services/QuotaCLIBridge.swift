@@ -150,7 +150,7 @@ extension ProviderRateLimit.Provider {
     /// quota protocol; selecting it must never start a subprocess or request.
     var usesQuotaCLI: Bool {
         switch self {
-        case .kimiCode, .zCode, .grok: return true
+        case .kimiCode, .zCode, .grok, .opencodeGo: return true
         case .codex, .claudeCode, .cursor: return false
         }
     }

@@ -30,7 +30,7 @@ struct QuotaProductTests {
 
     /// A fresh install selects every locally detected product that has a
     /// working adapter — there is no display cap any more, so a machine with
-    /// four of them gets four cards. Cursor stays out: it has no stable quota
+    /// five of them gets five cards. Cursor stays out: it has no stable quota
     /// protocol yet.
     @Test
     func firstLaunchSelectsEveryDetectedReadyProduct() {
@@ -39,10 +39,10 @@ struct QuotaProductTests {
 
         let selection = QuotaSelectionPreferences.resolve(
             defaults: defaults,
-            products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .cursor])
+            products: products(detected: [.codex, .claudeCode, .kimiCode, .grok, .opencodeGo, .cursor])
         )
 
-        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok])
+        #expect(selection == [.codex, .claudeCode, .kimiCode, .grok, .opencodeGo])
         #expect(defaults.bool(forKey: QuotaSelectionPreferences.initializedKey))
     }
 
@@ -156,6 +156,10 @@ struct QuotaProductTests {
             withIntermediateDirectories: true
         )
         try fileManager.createDirectory(
+            at: home.appendingPathComponent(".local/share/opencode", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
             at: applications.appendingPathComponent("Cursor.app", isDirectory: true),
             withIntermediateDirectories: true
         )
@@ -175,10 +179,12 @@ struct QuotaProductTests {
         #expect(byProvider[.codex]?.isDetected == true)
         #expect(byProvider[.kimiCode]?.isDetected == true)
         #expect(byProvider[.grok]?.isDetected == true)
+        #expect(byProvider[.opencodeGo]?.isDetected == true)
         #expect(byProvider[.cursor]?.isDetected == true)
         #expect(byProvider[.zCode]?.isDetected == false)
         #expect(byProvider[.kimiCode]?.isSelectable == true)
         #expect(byProvider[.grok]?.isSelectable == true)
+        #expect(byProvider[.opencodeGo]?.isSelectable == true)
         #expect(byProvider[.cursor]?.isSelectable == false)
     }
 

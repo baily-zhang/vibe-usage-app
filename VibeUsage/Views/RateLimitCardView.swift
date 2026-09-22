@@ -838,6 +838,7 @@ struct ProviderIcon: View {
         case .kimiCode:   resource = "kimi-icon"
         case .zCode:      resource = "zcode-icon"
         case .grok:       resource = "grok-icon"
+        case .opencodeGo: resource = "opencode-icon"
         case .cursor:     resource = "cursor-icon"
         }
         let url = Bundle.appResources.url(forResource: resource, withExtension: "png")
@@ -889,6 +890,7 @@ private extension ProviderRateLimit.Provider {
         case .kimiCode: return "moon.stars"
         case .zCode: return "z.square"
         case .grok: return "bolt.horizontal.circle"
+        case .opencodeGo: return "chevron.left.forwardslash.chevron.right"
         case .cursor: return "cursorarrow.rays"
         }
     }

@@ -474,7 +474,7 @@ final class AppState {
         switch provider {
         case .codex: return isCodexRateLimitRefreshing
         case .claudeCode: return isClaudeRateLimitRefreshing
-        case .kimiCode, .zCode, .grok: return cliQuotaRefreshingProviders.contains(provider)
+        case .kimiCode, .zCode, .grok, .opencodeGo: return cliQuotaRefreshingProviders.contains(provider)
         case .cursor: return false
         }
     }
@@ -564,7 +564,7 @@ final class AppState {
         case .claudeCode:
             guard claudeRateLimitEnabled else { return }
             await rateLimitCoordinator?.refreshClaude()
-        case .kimiCode, .zCode, .grok:
+        case .kimiCode, .zCode, .grok, .opencodeGo:
             guard isQuotaProviderSelected(provider) else { return }
             await rateLimitCoordinator?.refreshCLIProviders([provider])
         case .cursor: return

@@ -48,13 +48,14 @@ export function verifyPackage(packageRoot, specifier = releasePackage()) {
       VIBE_USAGE_QUOTA_CACHE_DIR: join(fixtureRoot, 'quota-cache'),
       KIMI_SHARE_DIR: join(fixtureRoot, 'kimi'),
       GROK_HOME: join(fixtureRoot, 'grok'),
+      VIBE_USAGE_OPENCODE_DIRS: join(fixtureRoot, 'opencode'),
     };
     const invoke = args => JSON.parse(run(process.execPath,
       [join(packageRoot, 'bin/vibe-usage.js'), ...args], { env: environment, cwd: fixtureRoot }));
     assert.deepEqual(invoke(['config', 'roots']), {}, 'Config output must stay JSON-only');
     const discovery = invoke(['quota', 'discover', '--json']);
     assert.equal(discovery.schemaVersion, 1, 'Unsupported quota discovery schema');
-    const products = ['kimi-code', 'zcode', 'grok'];
+    const products = ['kimi-code', 'zcode', 'grok', 'opencode-go'];
     for (const id of products) {
       assert.equal(discovery.products.find(product => product.id === id)?.fetchable, true,
         `Missing quota adapter: ${id}`);
@@ -64,7 +65,7 @@ export function verifyPackage(packageRoot, specifier = releasePackage()) {
     assert.equal(quota.schemaVersion, 1, 'Unsupported quota fetch schema');
     assert.deepEqual(quota.products.map(product => product.id), products);
     assert.deepEqual(quota.products.map(product => product.status),
-      ['missing_credentials', 'missing_credentials', 'no_data']);
+      ['missing_credentials', 'missing_credentials', 'no_data', 'missing_credentials']);
     for (const product of quota.products) {
       assert.deepEqual(product.meters, []);
       assert.ok(Number.isFinite(Date.parse(product.fetchedAt)), 'Missing quota timestamp');

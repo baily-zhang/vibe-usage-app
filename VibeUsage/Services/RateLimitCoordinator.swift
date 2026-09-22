@@ -510,7 +510,7 @@ final class RateLimitCoordinator {
             cancelCodexRefresh()
         case .claudeCode:
             cancelClaudeRefresh()
-        case .kimiCode, .zCode, .grok:
+        case .kimiCode, .zCode, .grok, .opencodeGo:
             cancelCLIRefresh()
         case .cursor: break
         }

@@ -49,6 +49,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
         case kimiCode = "kimi-code"
         case zCode = "zcode"
         case grok = "grok"
+        case opencodeGo = "opencode-go"
         case cursor = "cursor"
 
         var displayName: String {
@@ -58,6 +59,7 @@ struct ProviderRateLimit: Equatable, Identifiable {
             case .kimiCode: return "Kimi Code"
             case .zCode: return "ZCode"
             case .grok: return "Grok"
+            case .opencodeGo: return "OpenCode Go"
             case .cursor: return "Cursor"
             }
         }

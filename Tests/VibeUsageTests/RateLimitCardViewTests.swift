@@ -12,16 +12,16 @@ struct RateLimitCardViewTests {
     }
 
     /// Every enabled product owns a card, in selection order, whatever its
-    /// state. Four products is where the old two-slot layout used to drop rows
+    /// state. Five products is where the old two-slot layout used to drop rows
     /// and where the section used to fold into one capability notice; the row
     /// now scrolls instead.
     @Test
     func everyEnabledProductGetsItsOwnCardInSelectionOrder() {
         let content = RateLimitCardView.sectionContent(
-            selected: [.codex, .claudeCode, .kimiCode, .grok]
+            selected: [.codex, .claudeCode, .kimiCode, .grok, .opencodeGo]
         )
 
-        #expect(content == .cards([.codex, .claudeCode, .kimiCode, .grok]))
+        #expect(content == .cards([.codex, .claudeCode, .kimiCode, .grok, .opencodeGo]))
     }
 
     /// The notice is reserved for "you enabled nothing", where it explains the

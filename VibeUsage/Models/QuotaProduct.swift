@@ -68,6 +68,7 @@ enum QuotaProductRegistry {
         (.kimiCode, .ready),
         (.zCode, .ready),
         (.grok, .ready),
+        (.opencodeGo, .ready),
         (.cursor, .pendingProtocol),
     ]
 
@@ -121,6 +122,12 @@ enum QuotaProductRegistry {
             relativePaths = [".grok"]
             appNames = []
             executableNames = ["grok"]
+        case .opencodeGo:
+            // The Go subscription key lives in OpenCode's own data directory;
+            // the general-purpose OpenCode CLI is the only product surface.
+            relativePaths = [".local/share/opencode"]
+            appNames = []
+            executableNames = ["opencode"]
         case .cursor:
             relativePaths = [".cursor"]
             appNames = ["Cursor.app"]
